@@ -1,11 +1,10 @@
-# goreleaser.yml
-
 project_name: TerrafyARM
 
 # General build configuration
 builds:
   - id: terrafyarm_build
-    main: ./src/main.go
+    main: ./src/main.go  # Correct path to the main.go file
+    dir: ./src           # Correct directory for the Go source code
     env:
       - CGO_ENABLED=0
     goos:
