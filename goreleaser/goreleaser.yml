@@ -1,5 +1,5 @@
 # goreleaser.yml
-
+version: 2
 project_name: TerrafyARM
 
 # General build configuration
