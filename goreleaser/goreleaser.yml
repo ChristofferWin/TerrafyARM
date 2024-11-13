@@ -5,7 +5,6 @@ project_name: TerrafyARM
 # General build configuration
 builds:
   - id: terrafyarm_build
-    main: ./src/main.go
     env:
       - CGO_ENABLED=0
     goos:
