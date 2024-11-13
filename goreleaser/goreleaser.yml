@@ -1,10 +1,13 @@
+# goreleaser.yml
+
+version: 2
+
 project_name: TerrafyARM
 
 # General build configuration
 builds:
   - id: terrafyarm_build
-    main: ./src/main.go  # Correct path to the main.go file
-    dir: ./src           # Correct directory for the Go source code
+    main: ../src/
     env:
       - CGO_ENABLED=0
     goos:
@@ -37,6 +40,7 @@ archives:
 # Artifacts configuration
 release:
   disable: false
+  version: v0.1.0-alpha
 
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"
