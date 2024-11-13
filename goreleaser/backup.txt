@@ -1,0 +1,107 @@
+# goreleaser.yml
+
+project_name: TerrafyARM
+
+# General build configuration
+builds:
+  - id: terrafyarm_build
+    main: ../src/
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - 6
+      - 7
+    targets:
+      - linux/amd64
+      - linux/arm64
+      - darwin/amd64
+      - darwin/arm64
+      - windows/amd64
+      - windows/arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default_archive
+    format: tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+# Linux packages (e.g., Debian, RPM)
+nfpms:
+  - id: default_package
+    formats: ["deb", "rpm"]
+    package_name: terrafyarm
+    vendor: "TerrafyARM"
+    homepage: "https://github.com/ChristofferWin/TerrafyARM"
+    license: "MIT"
+    description: "A tool to convert ARM templates to Terraform code"
+    maintainer: "christoffer@codeterraform.com"
+    binds:
+      - /usr/local/bin
+
+# MacOS Homebrew tap
+brews:
+  - name: terrafyarm
+    tap:
+      owner: ChristofferWin
+      name: homebrew-terrafyarm
+    folder: Formula
+    homepage: "https://github.com/ChristofferWin/TerrafyARM"
+    description: "TerrafyARM converts ARM templates to Terraform code."
+    install: |
+      bin.install "terrafyarm"
+    tests:
+      - terrafyarm --version
+
+# Windows Scoop Manifest (for Scoop)
+scoop:
+  - bucket:
+      name: scoop-bucket
+      owner: ChristofferWin
+      repo: scoop-terrafyarm
+    description: "A tool for converting ARM templates to Terraform code."
+    homepage: "https://github.com/ChristofferWin/TerrafyARM"
+    license: "MIT"
+
+# Chocolatey (Custom Setup via Snapcraft Hook)
+snapcrafts:
+  - name: terrafyarm
+    summary: "A tool to convert ARM templates to Terraform code."
+    description: "TerrafyARM converts ARM templates to Terraform code."
+    grade: stable
+    confinement: strict
+    apps:
+      terrafyarm:
+        command: terrafyarm
+    publish_resources:
+      - choco-publish.ps1
+
+# Artifacts configuration
+release:
+  disable: false
+  version: v0.1.0-alpha
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+# Custom publishing script
+hooks:
+  before:
+    - name: choco
+      cmd: "powershell -ExecutionPolicy Bypass -File ./choco-publish.ps1"
