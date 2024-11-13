@@ -38,7 +38,6 @@ archives:
 # Artifacts configuration
 release:
   disable: false
-  version: 2
 
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"
