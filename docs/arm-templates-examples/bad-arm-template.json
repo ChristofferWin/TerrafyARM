@@ -1,0 +1,7 @@
+{
+    "id": "/subscriptions/82c53022-ea32-4837-a0be-09ac6e5a147f/resourceGroups/vm-rg",
+    "name": "vm-rg",
+    "type": "Microsoft.Resources/resourceGroups",
+    "location": "westeurope",
+    "tags": {}
+}
