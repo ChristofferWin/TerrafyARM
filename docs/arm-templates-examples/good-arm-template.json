@@ -1,7 +1,12 @@
 {
-    "id": "/subscriptions/82c53022-ea32-4837-a0be-09ac6e5a147f/resourceGroups/vm-rg",
-    "name": "vm-rg",
-    "type": "Microsoft.Resources/resourceGroups",
-    "location": "westeurope",
-    "tags": {}
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/my-rg", //Required
+    "name": "my-rg", //Required
+    "type": "Microsoft.Resources/resourceGroups", //Required
+    "location": "westeurope", //Required
+    "tags": {
+        "my tag": "cool tag value" //Tags are NOT required (But always recommended)
+    },
+    "properties": { //This object is required but for some resources like resource_group, the only attribute is "provisioningState" Which is OK
+        "provisioningState": "Succeeded"
+    }
 }
