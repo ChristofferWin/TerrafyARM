@@ -1,12 +1,7 @@
-# TerrafyARM
-The world's first ARM to Terraform transformation system
-
-<p style="display: flex; align-items: center;">
-  <span style="margin-right: 10px;">The world's first ARM to Terraform transformation system</span>
-  <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/Demo.png" alt="TerrafyARM Demo" width="100" />
-</p>
-<br/>
-<p style="display: flex; align-items: center;">
-  <span style="margin-right: 10px;">The world's first ARM to Terraform transformation system</span>
-  <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png" alt="TerrafyARM Logo" width="100" />
-</p>
+<div style="text-align: center;">
+  <h1>TerrafyARM</h1>
+  <p>The world's first ARM to Terraform transformation system - Runs on ALL common platforms!</p>
+  <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20%mascot%20%small.png" alt="TerrafyARM Logo" />
+  <br />
+  <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/Demo.png" alt="TerrafyARM Demo" />
+</div>
