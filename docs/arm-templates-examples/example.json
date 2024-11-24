@@ -1,4 +1,4 @@
-{
+{ //WHEN ACTUALLY RUNNING AGAINST THE APPLICATION NO COMMENTS ARE ALLOWED
     "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/my-rg", //Required
     "name": "my-rg", //Required
     "type": "Microsoft.Resources/resourceGroups", //Required
