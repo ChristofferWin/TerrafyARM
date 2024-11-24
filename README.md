@@ -1,6 +1,32 @@
 # TerrafyARM - The worlds first Azure-ARM to Terraform transformation system
-This marks the very first release of the product - '0.1.0-alpha' ![TerrafyARM mascot](https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png)
+This marks the very first release of the product - '0.1.0-alpha' 
 
+## Sections
+<div style="display: flex; justify-content: space-between; align-items: center;">
+  <div>
+    # Reference List for TerrafyARM
+
+    ## Sections
+    1. [Disclaimer](#disclaimer)
+    2. [PowerShell and CLI ARM Template Extracting Example](#powershell-and-cli-arm-template-extracting-example)
+    3. [Getting Started](#getting-started)
+        - [Install via Brew](#install-via-brew)
+        - [Install via Chocolatey](#install-via-chocolatey)
+        - [Install via Snapcraft](#install-via-snapcraft)
+    4. [Examples](#examples)
+
+    ## External Links
+    - [TerrafyARM GitHub Repository](https://github.com/ChristofferWin/TerrafyARM)
+    - [Issues Page](https://github.com/ChristofferWin/TerrafyARM/issues)
+    - [AzureRM Terraform Provider Documentation](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)
+    - [PowerShell Core Installation Guide](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell?view=powershell-7.4)
+    - [Azure CLI Installation Guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+    - [TerrafyARM Releases](https://github.com/ChristofferWin/TerrafyARM/releases)
+  </div>
+  <div>
+    <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png" alt="TerrafyARM mascot" style="max-width: 150px;">
+  </div>
+</div>
 
 ## Disclaimer
 This is an alpha release so expect bugs. Please report any issues over at => https://github.com/ChristofferWin/TerrafyARM/issues
@@ -97,4 +123,6 @@ The current version of the 'TerrafyArm' Decompiler is '0.1.0'
 For information about versions, please check the official Github release page at:
 https://github.com/ChristofferWin/TerrafyARM/releases
 ````
+
+## Examples
 
