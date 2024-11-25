@@ -6,10 +6,10 @@ class YourApp < Formula
     license "MIT"
   
     def install
-      bin.install "terrafyarm"
+      bin.install "TerrafyARM"
     end
   
     test do
-      system "#{bin}/terrafyarm", "--version"
+      system "#{bin}/TerrafyARM", "--version"
     end
   end
