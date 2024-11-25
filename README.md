@@ -1,6 +1,6 @@
 # TerrafyARM - The worlds first Azure-ARM to Terraform transformation system
 The TerrafyARM mascot says HI and welcome to the worlds very first ARM to Terraform decompiler / compiler!
-![TerrafyARM Logo](https://github.com/ChristofferWin/TerrafyARM/raw/main/logo.png "TerrafyARM - Decompiling ARM Templates")
+![TerrafyARM Logo](https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png "TerrafyARM - Decompiling ARM Templates")
 
 
 ## Sections
@@ -104,7 +104,7 @@ https://github.com/ChristofferWin/TerrafyARM/releases
 #Simply run the install command
 sudo snap install terrafyarm
 #Check whether installation is OK and application is in the PATH variable
-TerrafyARM -help
+terrafyarm -help
 #OUTPUT
 The current version of the 'TerrafyArm' Decompiler is '0.1.0'
 For information about versions, please check the official Github release page at:
