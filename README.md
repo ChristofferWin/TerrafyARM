@@ -1,32 +1,17 @@
 # TerrafyARM - The worlds first Azure-ARM to Terraform transformation system
-This marks the very first release of the product - '0.1.0-alpha' 
+The TerrafyARM mascot says HI and welcome to the worlds very first ARM to Terraform decompiler / compiler!
+![TerrafyARM Logo](https://github.com/ChristofferWin/TerrafyARM/raw/main/logo.png "TerrafyARM - Decompiling ARM Templates")
+
 
 ## Sections
-<div style="display: flex; justify-content: space-between; align-items: center;">
-  <div>
-    # Reference List for TerrafyARM
+1. [Disclaimer](#disclaimer)
+2. [PowerShell and CLI ARM Template Extracting Example](#powershell-and-cli-arm-template-extracting-example)
+3. [Getting Started](#getting-started)
+    - [Install via Brew](#install-via-brew)
+    - [Install via Chocolatey](#install-via-chocolatey)
+    - [Install via Snapcraft](#install-via-snapcraft)
+4. [Examples](#examples)
 
-    ## Sections
-    1. [Disclaimer](#disclaimer)
-    2. [PowerShell and CLI ARM Template Extracting Example](#powershell-and-cli-arm-template-extracting-example)
-    3. [Getting Started](#getting-started)
-        - [Install via Brew](#install-via-brew)
-        - [Install via Chocolatey](#install-via-chocolatey)
-        - [Install via Snapcraft](#install-via-snapcraft)
-    4. [Examples](#examples)
-
-    ## External Links
-    - [TerrafyARM GitHub Repository](https://github.com/ChristofferWin/TerrafyARM)
-    - [Issues Page](https://github.com/ChristofferWin/TerrafyARM/issues)
-    - [AzureRM Terraform Provider Documentation](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)
-    - [PowerShell Core Installation Guide](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell?view=powershell-7.4)
-    - [Azure CLI Installation Guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
-    - [TerrafyARM Releases](https://github.com/ChristofferWin/TerrafyARM/releases)
-  </div>
-  <div>
-    <img src="https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png" alt="TerrafyARM mascot" style="max-width: 150px;">
-  </div>
-</div>
 
 ## Disclaimer
 This is an alpha release so expect bugs. Please report any issues over at => https://github.com/ChristofferWin/TerrafyARM/issues
@@ -85,7 +70,9 @@ Download 'TerrafyARM' Either from source (<a href="">releases</a>) or one of the
 2. [Chocolatey (Windows)](#install-via-chocolatey)
 3. [Snapcraft (Linux)](#install-via-snapcraft)
 
-Note: Using a package manager is ALWAYS recommended
+NOTE 1: The actual executable program name is *terrafyarm* on Linux and MacOS, as these operating systems are case-sensitive
+
+NOTE 2: Using a package manager is ALWAYS recommended
 
 ### Install via Brew
 ````bash
@@ -125,4 +112,111 @@ https://github.com/ChristofferWin/TerrafyARM/releases
 ````
 
 ## Examples
+Lets explorer some of the features that TerrafyARM provides:
 
+1. [1 ARM template file containing resources from 1 subscription](#install-via-brew)
+2. [A folder of ARM template files containing resources from 1 subscription](#install-via-chocolatey)
+3. [A folder of ARM template files containing resources from MULTIPLE subscriptions](#install-via-snapcraft)
+
+NOTE: Make sure that the ARM templates are in a valid format for TerrafyARM - Check [PowerShell and CLI ARM template extracting example](#powershell-and-cli-arm-template-extracting-example) 
+
+### 1 ARM file - 1 Azure Subscription (Simple)
+When Azure resources have sub-components, TerrafyARM must isolate them during runtime, determining whether the resource can be defined separately from the main resource or not in Terraform.
+
+E.g., take an Azure Virtual Network – it can contain subnets, peerings, and more. Subnets, in terms of Terraform, can be defined as blocks within the Virtual Network, but something like Peerings can’t. This results in TerrafyARM building a Virtual Network Terraform resource, where the subnet is directly defined within it, and any peering will be created as a separate resource definition.
+````ps1
+#TerrafyARM allows that you only provide an output folder path location as either a relative or full path - It does not care if you use '/' or '\'
+
+#By ommiting the 'file-path' flag, the ARM template MUST reside at the CURRENT location of the environment, e.g. 'cd <path to where I run the application from>'
+
+<#Lets say we have an ARM template consiting of:
+1 Azure Resource Group
+1 Azure Virtual Network with 1 subnet and 1 peering
+1 Azure VM
+#>
+terrafyarm -output-file-path ./my-terraform-templates #terrafyarm will create the folder if it does not exist
+# EXAMPLE OUTPUT FROM APPLICATION
+ARM source file(s) location: ./
+ARM files analyzed: 1
+Terraform file(s) location: ./my-terraform-templates
+Terraform files created: 5
+Terraform resources defined: 4
+
+#If you then take an ls of newly created folder './my-terraform-templates' we will see:
+cd ./my-terraform-templates
+ls
+#OUTPUT FROM LS
+linux_virtual_machine.tf
+providers.tf #This will only contain the 'default' AzureRM context, because we only ran resources defined in 1 Azure Subscription
+resource_group.tf
+virtual_network_peering.tf
+virtual_network.tf
+
+#The Terraform code is ready to be run, make sure write access to the subscription via az cli
+#Terraform commands
+terraform init
+terraform plan
+terraform apply
+````
+
+### Folder of ARM templates with resources defined for 1 Azure Subscription
+Please see example [1 ARM file - 1 Azure Subscription (Simple)](#powershell-and-cli-arm-template-extracting-example) first as the behaviour is exactly the same, only now we define flag 'file-path' to tell TerrafyARM where the folder of ARM templates are located.
+
+The final Terraform compiled code will be exactly the same, so separate your resources HOWEVER you like.
+
+````ps1
+<#As from example 1, we use the same resources, but now they are seperated into the following ARM files:
+
+1. virtual_network.json //The name can be anyting we want, but MUST end with .json
+2. resource_group.json
+3. linux_virtual_machine.json 
+#>
+
+#Run TerrafyARM on the given folder
+terrafyarm -file-path ./my-arm-templates -output-file-path ./my-terraform-templates
+# EXAMPLE OUTPUT FROM APPLICATION
+ARM source file(s) location: .\my-arm-templates\
+ARM files analyzed: 3 #Now we analyze 3 files
+Terraform file(s) location: .\my-terraform-templates
+Terraform files created: 5
+Terraform resources defined: 4
+````
+
+### Multiple ARM templates from multiple Azure Subscriptions
+This example showcases the scenario of "scraping" entire environments out of Azure and then controlling the Terraform provider configuration for all the resulting compiled Terraform resource definitions. To understand what 'Terraform Providers' means, please read the HashiCorp documentation: [Terraform Provider docs](https://developer.hashicorp.com/terraform/language/providers)
+
+If in doubt about how to "scrape" your Azure resources, check out [1 ARM file - 1 Azure Subscription (Simple)](#powershell-and-cli-arm-template-extracting-example) first before continuing
+
+NOTE: Using custom Terraform providers is NOT required, as TerrafyARM can automatically handle it. The consequence is provider names suffixed with the first segment of an Azure Subscription ID and the name, e.g., alias = auto_provider_00000000
+
+````ps1
+<#The number of resources, ARM files and different subscriptions are not important for this example
+
+Instead, just focuse on the following facts as an example:
+1. We have subscription with id "00000000-0000-0000-0000-000000000000"
+2. We have subscription with id "11111111-1111-1111-1111-111111111111"
+3. Both subscriptions have many different resources, but we want to make sure its clear in the Terraform code, that the resources using the provider has specific human like names
+#>
+
+#Use of flag '-custom-terraform-provider-names' To control the names of the 2 subscription_id's above
+
+#Use the TerrafyARM -help flag to see the naming requirements for custom Terraform providers
+
+terrafyarm -file-path ./my-arm-templates -output-file-path ./my-terraform-templates  -custom-terraform-provider-names "00000000-0000-0000-0000-000000000000=my0provider,11111111-1111-1111-1111-111111111111=my1provider"
+
+# FROM provider.tf AFTER these custom settings example
+provider "azurerm" {
+  features {}
+  alias           = "my0provider"
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+}
+
+
+provider "azurerm" {
+  features {}
+  alias           = "my1provider"
+  subscription_id = "11111111-1111-1111-1111-111111111111"
+}
+
+#The resources with set subscription_id's WILL have your new custom providers
+````
