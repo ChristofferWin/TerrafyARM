@@ -75,7 +75,7 @@ NOTE 1: The actual executable program name is *terrafyarm* on Linux and MacOS, a
 NOTE 2: Using a package manager is ALWAYS recommended
 
 ### Install via Brew
-````bash
+````ps1
 #Add the tap as the application is not part of brew core
 brew tap ChristofferWin/terrafyarm
 #Let brew do its magic
@@ -100,7 +100,7 @@ https://github.com/ChristofferWin/TerrafyARM/releases
 ````
 
 ### Install via Snapcraft
-````bash
+````ps1
 #Simply run the install command
 sudo snap install terrafyarm
 #Check whether installation is OK and application is in the PATH variable
