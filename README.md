@@ -28,9 +28,9 @@ In a nutshell, the same as all resources defined under the Terraform documentati
 
 You can feed the application any number of ARM templates from any number of subscriptions and in any order.
 
-<b>NOTE:
+NOTE:
 
-ARM templates fed to 'TerrafyARM' MUST adhere to a certain standard and using directly exported templates will NOT work. Exported templates using "Export Azure" will create ARM templates structued in a way that the application simply does not understand.</b>
+ARM templates fed to 'TerrafyARM' <b>MUST adhere to a certain standard and using directly exported templates will NOT work.</b> Exported templates using "Export Azure" will create ARM templates structued in a way that the application simply does not understand.</b>
 
 Instead - Use a tool like az cli to retrieve ARM templates:
 
@@ -114,9 +114,9 @@ https://github.com/ChristofferWin/TerrafyARM/releases
 ## Examples
 Lets explorer some of the features that TerrafyARM provides:
 
-1. [1 ARM template file containing resources from 1 subscription](#install-via-brew)
-2. [A folder of ARM template files containing resources from 1 subscription](#install-via-chocolatey)
-3. [A folder of ARM template files containing resources from MULTIPLE subscriptions](#install-via-snapcraft)
+1. [1 ARM template file containing resources from 1 subscription](#1-arm-file---1-azure-subscription-simple)
+2. [A folder of ARM template files containing resources from 1 subscription](#folder-of-arm-templates-with-resources-defined-for-1-azure-subscription)
+3. [A folder of ARM template files containing resources from MULTIPLE subscriptions](#multiple-arm-templates-from-multiple-azure-subscriptions)
 
 NOTE: Make sure that the ARM templates are in a valid format for TerrafyARM - Check [PowerShell and CLI ARM template extracting example](#powershell-and-cli-arm-template-extracting-example) 
 
@@ -160,7 +160,7 @@ terraform apply
 ````
 
 ### Folder of ARM templates with resources defined for 1 Azure Subscription
-Please see example [1 ARM file - 1 Azure Subscription (Simple)](#powershell-and-cli-arm-template-extracting-example) first as the behaviour is exactly the same, only now we define flag 'file-path' to tell TerrafyARM where the folder of ARM templates are located.
+Please see example [1 ARM file - 1 Azure Subscription (Simple)](#1-arm-file---1-azure-subscription-simple) first as the behaviour is exactly the same, only now we define flag 'file-path' to tell TerrafyARM where the folder of ARM templates are located.
 
 The final Terraform compiled code will be exactly the same, so separate your resources HOWEVER you like.
 
