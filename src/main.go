@@ -12,49 +12,22 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/fatih/color"
 )
 
-/*
-   Application Name: TerrafyArm
-   Description: This application [brief description of what the application does, e.g., "processes Azure ARM templates and converts them into Terraform configurations"].
-
-   Usage:
-   - [Briefly describe how to run or use the application, e.g., "Run using 'go run main.go' or build using 'go build'."]
-   - Required arguments or configurations (if any): [List any required configurations or arguments].
-   - Optional arguments or configurations: [List any optional configurations or arguments].
-
-   Key Features:
-   - [Feature 1: Describe the first key feature or functionality]
-   - [Feature 2: Describe the second key feature or functionality]
-   - [Feature 3: Describe any additional notable feature or functionality]
-
-   Dependencies:
-   - [List any dependencies required, e.g., external packages, APIs, or environment configurations]
-
-   Author: [Your Name]
-   Created: [Creation Date]
-   Version: [Current Version]
-   License: [Specify the license under which this code is distributed]
-
-   Example:
-   ```
-   // Provide a basic usage example if applicable
-   ```
-
-   Note: [Any additional notes, warnings, or special instructions]
-*/
-
 type Attribute struct {
-	Type       string          `json:"Type"`
-	Name       string          `json:"Name"`
-	Parent     string          `json:"Parent"`
-	Required   bool            `json:"Required"`
-	Descriptor string          `json:"Descriptor"`
-	ShadowCopy ShadowAttribute `json:"ShadowCopy"`
+	Type         string          `json:"Type"`
+	Name         string          `json:"Name"`
+	Parent       string          `json:"Parent"`
+	Required     bool            `json:"Required"`
+	Descriptor   string          `json:"Descriptor"`
+	ShadowCopy   ShadowAttribute `json:"ShadowCopy"`
+	TerraformURL string          `json:TerraformURL`
 }
 
 type ShadowAttribute struct {
@@ -83,10 +56,12 @@ type ArmObject struct {
 
 // Define the HtmlObject struct with a named attributes field
 type HtmlObject struct {
-	Resource_type string      `json:"Resource_type"`
-	Version       string      `json:"Version"`
-	Attribute     []Attribute `json:"Attribute"`
-	Not_found     bool
+	Resource_type           string      `json:"Resource_type"`
+	Version                 string      `json:"Version"`
+	Attribute               []Attribute `json:"Attribute"`
+	Not_found               bool
+	Last_updated            string `json:LastUpdated`
+	CountOfArmResourceTypes int    `CountOfArmResourceTypes`
 }
 
 type RootAttribute struct {
@@ -123,6 +98,7 @@ type CompileObject struct {
 	IsRoot                 bool
 	HtmlObject             HtmlObject
 	AliasProviderName      string
+	ProviderName           string
 }
 
 type TerraformObject struct {
@@ -136,11 +112,29 @@ type TerraformStringConfigObject struct { //This block can be expanded so that i
 	FileName     string
 }
 
+type StatusObject struct {
+	CountFilesCreated              int     `json:"countFilesCreated"`
+	CountFilesFailCreate           int     `json:"countFilesFailCreate"`
+	CountNotFoundResourceType      int     `json:"countNotFoundResourceType"`
+	CountAnalyzedARMTemplates      int     `json:CountAnalyzedARMTemplates`
+	CountUniqueARMResourceTypes    int     `json:CountUniqueResourceTypes`
+	CountTerraformResources        int     `json:CountTerraformResources`
+	DeploymentFolder               string  `json:"deploymentFolder"`
+	TotalPercentageMatch           float64 `json:"totalPercentageMatch"`
+	PercentageMatchPerResourceType struct {
+		ResourceType    string  `json:"resourceType"`
+		PercentageMatch float64 `json:"percentageMatch"`
+	} `json:"percentageMatchPerResourceType"`
+}
+
+var MapOfResourceTypePerAttributeCount = make(map[string]int)
+var ReturnStatusObject = StatusObject{}
+var HtmlBaseURL = ""
 var htmlObjects = []HtmlObject{}
 var AttributeObjects = []Attribute{}
 var SystemTerraformDocsFileName string = "./terrafyarm/htmlobjects.json"
 var SystemTerraformCompiledObjectsFileName string = "./terrafyarm/terraform-arm-compiled-objects.json"
-var currentVersion string = "0.1.0"
+var CurrentVersion string = "0.1.0"
 var verbose bool
 var GlobalHtmlAttributesToMatchAgainst = []Attribute{}
 
@@ -149,81 +143,122 @@ func init() {
 }
 
 func main() {
-	filePath := flag.String("file-path", "./", "(Optional & Recommended) Path to the ARM json file(s) Can be either a specific filepath or directory path\ne.g. 'C:\\ArmTemplates', 'C:\\ArmTemplates\\myarmfile.json' OR '.\\ArmTemplates', '.\\ArmTemplates\\myarmfile.json'\nNote: The path symbol might change, e.g. '\\' on Windows and '/' On Unix-based systems like MacOS & Linux")
-	noCache := flag.Bool("no-cache", false, "(Optional) Switch to determine whether to force 'TerrafyArm' To not use / build a cache (default false)")
-	clearCache := flag.Bool("clear-cache", false, "(Optional) Switch to determine whether to force 'TerrafyArm' to remove all cache (default false)\nUse this switch to reset 'TerrafyArm' everytime new resource types are added to the folder of ARM templates\nNote: 'TerrafyArm' will exit after completion (Even used with other arguments, the application exits right after cache removal)")
-	providerVersion := flag.String("provider-version", "latest", "(Optional) Use a custom version for the terraform decompiler, useful in cases where ARM templates are old and where an older provider version might give better results, '<major, minor, patch>', eg. '3.11.0' ")
-	seperateSubResources := flag.Bool("seperate-nested-resources", false, "(Optional) Switch to determine whether the decompiler shall seperate nested resources into their own Terraform resource definiton\nNote: This switch will not be enabled before a later version")
-	rootDecompilefolderPath := flag.String("output-file-path", "", "(Required) Path for the new root decompile folder which will be created\nParse either a full path e.g. 'C:\\Decompile\\<some folder name>\\my-new-terraform-folder'\nOr use a relative path e.g. '.\\my-new-terraform-folder'\nNote: The path symbol might change, e.g. '\\' on Windows and '/' On Unix-based systems like MacOS & Linux")
-	seperateDecompiledResources := flag.Bool("seperate-output-files", false, "(Optional) Switch to determine whether the resources being decompiled shall reside in isolated sub folder\nNote: This switch will not be enabled before a later version")
-	listOfSubscriptionNamedProviders := flag.String("custom-terraform-provider-names", "", "(Optional) Define a list to control the custom alias provider names for all ARM resources in Terraform\nThe list must be in format 'subscription_id=<a valid Azure Subscription ID>,' e.g. '00000000-0000-0000-0000-000000000000=mycustomnaliasname,11111111-1111-1111-1111-111111111111=mycustomname2'\nAny number of terraform-providers can be used. To read more about custom providers, see https://developer.hashicorp.com/terraform/language/providers/configuration")
-	version := flag.Bool("version", false, "(Optional) Switch to check the current installed local version of 'TerrafyArm'")
+	filePath := flag.String("file-path", "./", "(Optional & Recommended) Path to the ARM json file(s) Can be either a specific filepath or directory path\n\ne.g. 'C:\\ArmTemplates', 'C:\\ArmTemplates\\myarmfile.json' OR '.\\ArmTemplates', '.\\ArmTemplates\\myarmfile.json'\n\nNote: The path symbol might change, e.g. '\\' on Windows and '/' On Unix-based systems like MacOS & Linux\n")
+	noCache := flag.Bool("no-cache", false, "(Optional) Switch to determine whether to force 'TerrafyArm' To not use / build a cache (default false)\n")
+	clearCache := flag.Bool("clear-cache", false, "(Optional) Switch to determine whether to force 'TerrafyArm' to remove all cache (default false)\n\nUse this switch to reset 'TerrafyArm' everytime new resource types are added to the folder of ARM templates\n\nNote: 'TerrafyArm' will exit after completion (Even used with other arguments, the application exits right after cache removal)\n")
+	providerVersion := flag.String("provider-version", "latest", "(Optional) Control the specific Terraform 'AzureRM' provider version to use e.g. '4.9.0'\n")
+	seperateSubResources := flag.Bool("seperate-nested-resources", false, "(Optional) Switch to determine whether the decompiler shall seperate nested resources into their own Terraform resource definiton\n\nNote: This switch will not be enabled before a later version\n")
+	rootDecompilefolderPath := flag.String("output-file-path", "", "(Required) Path for the new root decompile folder which will be created\n\nParse either a full path e.g. 'C:\\Decompile\\<some folder name>\\my-new-terraform-folder'\n\nOr use a relative path e.g. '.\\my-new-terraform-folder'\n\nNote: The path symbol might change, e.g. '\\' on Windows and '/' On Unix-based systems like MacOS & Linux\n")
+	seperateDecompiledResources := flag.Bool("seperate-output-files", false, "(Optional) Switch to determine whether the resources being decompiled shall reside in isolated sub folder\n\nNote: This switch will not be enabled before a later version\n")
+	listOfSubscriptionNamedProviders := flag.String("custom-terraform-provider-names", "", "(Optional) Define a list to control the custom alias provider names for all ARM resources in Terraform\n\nThe list must be in format '<a valid Azure Subscription ID>=<alias name>'\n\ne.g. '00000000-0000-0000-0000-000000000000=mycustomnaliasname,11111111-1111-1111-1111-111111111111=mycustomname2'\n\nCustom provider names must not start with a number and only contain symbols '_' & '-'\n\nAny number of terraform-providers can be used. To read more about custom providers, see https://developer.hashicorp.com/terraform/language/providers/configuration\n")
+	filePathListOfSubscriptionProviders := flag.String("file-path-custom-providers", "", "(Optional NOT IN USE) Define either a full path or a relative path to the file of custom Azure subscription providers\n\nThe file format must be 'CSV' and should consist of a column named 'subscription_id' & 1 more named 'alias_name'\n\nTo see an example of such file, see: https://github.com/ChristofferWin/TerrafyARM/docs/custom_providers/example.csv\n")
+	chromeCustomPath := flag.String("chrome-custom-exe-path", "", "(Optional) Define either the relative or full path to the Google Chrome executeable\n\nNote: This parameter MUST be used if Chrome is not installed on any default path, which depends on the OS\n\nFor more information visit https://github.com/ChristofferWin/TerrafyARM/docs/")
+	version := flag.Bool("version", false, "(Optional) Switch to check the current installed local version of 'TerrafyArm'\n")
 	flag.Parse()
 
-	logVerbose("Please note that this version is an alpha. Some flags might be disabled and 'TerrafyArm' CAN give invalid results.")
+	logVerbose("Please note that this version is an alpha. Some flags might be disabled and 'TerrafyArm' CAN give invalid results")
 	logVerbose("If you see invalid results, it can actually work to simply run 'TerrafyArm' Again on the same ARM files")
+
+	if !CheckForTerraformExecuteable() {
+		logWarning(strings.TrimSpace(`Terraform was not found on the system
+It's ALWAYS recommended to have 'Terraform' installed alongside 'TerrafyArm'
+Install Terraform (Windows) visit: https://www.codeterraform.com/post/getting-started-with-using-terraform
+Install Terraform (Linux / MacOS) visit: https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli`))
+	}
+
 	if *version {
-		log.Fatalf("The current version of the 'TerrafyArm' Decompiler is '%s'\nFor information about versions, please check the official Github release page at:\nhttps://github.com/ChristofferWin/TerrafyARM/releases", currentVersion)
+		logOK(fmt.Sprintf("The current version of the 'TerrafyArm' Decompiler is '%s'\nFor information about versions, please check the official Github release page at:\nhttps://github.com/ChristofferWin/TerrafyARM/releases", CurrentVersion))
 		return
 	}
 
 	if *clearCache {
 		err := os.RemoveAll(strings.Split(SystemTerraformDocsFileName, "/")[1])
 		if err != nil {
-			log.Fatalf("The following error occured while trying to delete the cache:", err)
+			logFatal(fmt.Sprintf("The following error occured while trying to delete the cache: %s", err))
 		}
 		return
 	}
 
 	if *rootDecompilefolderPath == "" {
-		log.Fatalf("a path for flag '-output-file-path' must be provided...\nPlease use command 'terrafyarm -help' For details...")
+		logFatal("a path for flag '-output-file-path' must be provided...\nPlease use command 'terrafyarm -help' for details...")
 		return
 	}
 
 	if *seperateDecompiledResources {
-		log.Fatalf("The following flag 'seperate-nested-resources' is NOT in use as of version: %s", currentVersion)
+		logFatal(fmt.Sprintf("The following flag 'seperate-nested-resources' is NOT in use as of version: %s", CurrentVersion))
 		return
 	}
 
 	if *seperateSubResources {
-		log.Fatalf("The following flag 'seperate-output-files' is NOT in use as of version: %s", currentVersion)
+		logFatal(fmt.Sprintf("The following flag 'seperate-output-files' is NOT in use as of version: %s", CurrentVersion))
 	}
 
 	if typeValue := reflect.ValueOf(*listOfSubscriptionNamedProviders); typeValue.Kind() != reflect.String {
-		log.Fatalf("The value provided of '%s' for flag '-custom-terraform-provider-names' is not a string...\nUse 'TerrafyArm -help' For more details", listOfSubscriptionNamedProviders)
+		logFatal(fmt.Sprintf("The value provided of '%s' for flag '-custom-terraform-provider-names' is not a string...\nUse 'TerrafyArm -help' for more details", listOfSubscriptionNamedProviders))
 	}
 
-	// Call the ImportArmFile function with the filePath argument
+	if *listOfSubscriptionNamedProviders != "" && *filePathListOfSubscriptionProviders != "" {
+		logFatal("Please do not provide values for both flags 'custom-terraform-provider-names' & 'file-path-custom-providers' at the same time\nUse 'TerrafyArm -help' for more details")
+	}
+
+	if *filePathListOfSubscriptionProviders != "" {
+		logFatal(fmt.Sprintf("Please do not provide a value for flag 'file-path-custom-providers' as its not in use as of 'TerrafyArm' version '%s'", CurrentVersion))
+	}
+
+	if !CheckChromeInstalled(*chromeCustomPath) {
+		if *chromeCustomPath != "" {
+			logFatal(fmt.Sprintf("Chrome was not found on the given location '%s'\nPlease either provide a custom path to the executeable or make sure Google chrome is installed\nTo install Google chrome visit https://support.google.com/chrome/answer/95346?hl=en&co=GENIE.Platform%3DDesktop", *chromeCustomPath))
+		} else {
+			logFatal("Chrome was not found on any of the default installation locations on the system\nPlease either provide a custom path to the executeable or make sure Google chrome is installed\nTo install Google chrome visit https://support.google.com/chrome/answer/95346?hl=en&co=GENIE.Platform%3DDesktop")
+		}
+	}
+
+	CheckOnlineVersion(*chromeCustomPath)
+
 	fileContent, err := ImportArmFile(filePath)
 
 	if err != nil {
 		// Handle the error if it occurs
-		log.Fatalf("Error reading file:", err)
+		logFatal(fmt.Sprintf("Error reading file: %s", err))
 		return
 	}
 
 	verifiedFiles := VerifyArmFile(fileContent)
 	if len(verifiedFiles) == 0 {
-		log.Fatalf("No valid ARM templates found on path:", *filePath)
+		convertPathSymbols := strings.Replace(*filePath, "\\", "/", -1)
+		if strings.Contains(convertPathSymbols, ".json") {
+			logFatal(fmt.Sprintf("The ARM template provided '%s' is either in a wrong json format or missing the json object 'properties'\nFor more information see => %s", strings.Split(convertPathSymbols, "/")[len(strings.Split(convertPathSymbols, "/"))-1], "https://github.com/ChristofferWin/TerrafyARM/tree/main/docs/arm-templates-examples"))
+		} else {
+			logFatal(fmt.Sprintf("All ARM templates located at '%s' are not valid, either because they are in the wrong json format or missing the json object 'properties\nFor more information see => %s", *filePath, "https://github.com/ChristofferWin/TerrafyARM/tree/main/docs/arm-templates-examples"))
+		}
 		return
 	}
 
+	logOK(fmt.Sprintf("Successfully retrieved %d ARM templates from location %s", len(verifiedFiles), *filePath))
+
 	if *seperateSubResources {
-		fmt.Println("This flag is not implemented in the current version of TerrafyArm")
+		logFatal("This flag is not implemented in the current version of TerrafyArm")
 	}
 
 	baseArmResources := GetArmBaseInformation(verifiedFiles)
 
 	if err != nil {
-		log.Fatalf("Error while trying to retrieve the json ARM content", err)
+		logFatal(fmt.Sprintf("Error while trying to retrieve the json ARM content: %s", err))
 		return
 	}
 
 	var predetermineTypes []string
 	for _, armResource := range baseArmResources {
 		if armResource.Special_resource_type != "" {
-			for _, resourceType := range armResource.Resource_types {
-				predetermineTypes = append(predetermineTypes, ConvertArmToTerraformProvider(resourceType, armResource.Special_resource_type))
+			for x := 0; x <= len(armResource.Resource_types)-1; x++ {
+				finalResourceType := ""
+				for _, innerType := range armResource.Resource_types {
+					if len(strings.Split(innerType, "/")) == 2 {
+						finalResourceType = innerType
+						break
+					}
+				}
+				predetermineTypes = append(predetermineTypes, ConvertArmToTerraformProvider(finalResourceType, armResource.Special_resource_type))
 			}
 		}
 	}
@@ -243,7 +278,7 @@ func main() {
 	if !*noCache {
 		htmlObjectsFromCache, err = GetCachedSystemFiles()
 		if err != nil {
-			fmt.Println("No cache detected, retrieving all required information...")
+			logWarning("No cache detected, please expect 'TerrafyArm' to consume 5 seconds for each terraform type\nUse flag '-verbose' To see total calculated time required to retrieve cache")
 		}
 		for _, htmlObjectFromCache := range htmlObjectsFromCache {
 			if !htmlObjectFromCache.Not_found {
@@ -270,24 +305,31 @@ func main() {
 		}
 	}
 
-	cleanHtml := HtmlObject{} //THIS IS USED!!
+	ReturnStatusObject.CountUniqueARMResourceTypes = len(sortedResourceTypes)
 
+	cleanHtml := HtmlObject{} //THIS IS USED!!
+	logTime := ""
 	if htmlObjectsFromCache == nil {
-		for _, resourceType := range sortedResourceTypes {
+		for index, resourceType := range sortedResourceTypes {
+			if index == 0 {
+				logVerbose(fmt.Sprintf("Pulling terraform information for %d types\nEstimated time to download %s minutes/seconds...", len(sortedResourceTypes), fmt.Sprintf("%02d:%02d", len(sortedResourceTypes)*3/60, len(sortedResourceTypes)*3%60)))
+				logTime = timeFormat(time.Now())
+			}
 			if resourceType != "" {
-				rawHtml, err := GetRawHtml(resourceType, *providerVersion)
+				rawHtml, err := GetRawHtml(resourceType, *providerVersion, *chromeCustomPath)
 
 				if err != nil {
-					log.Fatalf("Error while trying to retrieve required documentation: %s\n%s", resourceType, err)
+					logFatal(fmt.Sprintf("Error while trying to retrieve required documentation: %s\n%s", resourceType, err))
 					break
 				}
 				if rawHtml != "not_found" && rawHtml != "" {
-					cleanHtml = SortRawHtml(rawHtml, resourceType)
+					logOK(fmt.Sprintf("Successfully retrieved terraform information about %s", resourceType))
+					cleanHtml = SortRawHtml(rawHtml, resourceType, logTime, len(sortedResourceTypes))
 					htmlObjects = append(htmlObjects, cleanHtml)
 				} else {
 					htmlObject := HtmlObject{
 						Resource_type: resourceType,
-						Not_found:     true, //We need to add more information to this struct, e.g. even though we cant retrieve its HTML, it still has a type, etc.
+						Not_found:     true,
 					}
 					htmlObjects = append(htmlObjects, htmlObject)
 				}
@@ -296,11 +338,12 @@ func main() {
 		if !*noCache {
 			err = NewCachedSystemFiles(htmlObjects, TerraformObject{})
 			if err != nil {
-				log.Fatalf("An error occured while running function 'NewCachedSystemFiles'\n%s", err)
+				logFatal(fmt.Sprintf("An error occured while running function 'NewCachedSystemFiles'\n%s", err))
 			}
 		}
 	} else {
 		htmlObjects = append(htmlObjects, htmlObjectsFromCache...)
+		logOK(fmt.Sprintf("Successfully retrieved cache. Cache last updated: %s", htmlObjectsFromCache[0].Last_updated))
 	}
 
 	var cleanhtmlObjects []HtmlObject
@@ -311,12 +354,29 @@ func main() {
 		}
 	}
 
+	if len(htmlObjectsFromCache) != 0 && len(htmlObjects) > len(htmlObjectsFromCache) {
+		if !*noCache {
+			fmt.Println(htmlObjects[0].CountOfArmResourceTypes, len(sortedResourceTypes))
+			logFatal("TerrafyARM has detected that new resource types have been added to the file/folder with ARM templates\nPlease rerun the command twice: first with the flag -clear-cache, and then without it to update the cache\nUse 'TerrafyARM -help' for more information")
+		}
+	}
+
 	compiledObjects := CompileTerraformObjects(baseArmResources, cleanhtmlObjects, *seperateSubResources)
+
 	terraformObject := NewTerraformObject(compiledObjects, *providerVersion)
 
 	err = NewCachedSystemFiles([]HtmlObject{}, terraformObject)
 	if err != nil {
-		log.Fatalf("An error occured while running function 'NewCachedSystemFiles'", err)
+		logFatal(fmt.Sprintf("An error occured while running function 'NewCachedSystemFiles' %s", err))
+	}
+
+	if len(terraformObject.CompileObjects) == 0 {
+		convertPathSymbols := strings.Replace(*filePath, "\\", "/", -1)
+		if strings.Contains(convertPathSymbols, ".json") {
+			logFatal(fmt.Sprintf("The ARM template provided '%s' did not match any 'AzureRM' Terraform provider attributes - An issue can always be raised at => %s", *filePath, "https://github.com/ChristofferWin/TerrafyARM/issues"))
+		} else {
+			logFatal(fmt.Sprintf("All ARM templates located at '%s' did not match any 'AzureRM' Terraform provider attributes - An issue can always be raised at => %s", *filePath, "https://github.com/ChristofferWin/TerrafyARM/issues"))
+		}
 	}
 
 	terraformFileNames := NewCompiledFolderStructure(*seperateDecompiledResources, *rootDecompilefolderPath, terraformObject)
@@ -334,21 +394,95 @@ func main() {
 	terraformStringConfigTotal := []TerraformStringConfigObject{}
 
 	for _, terraformCompiledObject := range terraformObject.CompileObjects {
-		terraformStringConfigObject := TerraformStringConfigObject{
-			StringConfig: NewTerraformConfig(terraformCompiledObject, *seperateSubResources),
-			FileName:     fmt.Sprintf("%s/%s", *rootDecompilefolderPath, terraformCompiledObject.FilePath),
+		terraformConfig := NewTerraformConfig(terraformCompiledObject, *seperateSubResources)
+		if len(terraformConfig) > 0 {
+			terraformStringConfigObject := TerraformStringConfigObject{
+				StringConfig: NewTerraformConfig(terraformCompiledObject, *seperateSubResources),
+				FileName:     fmt.Sprintf("%s/%s", *rootDecompilefolderPath, terraformCompiledObject.FilePath),
+			}
+			terraformStringConfigTotal = append(terraformStringConfigTotal, terraformStringConfigObject)
+		} else {
+			logVerbose(fmt.Sprintf("The resource %s of type %s has been skipped due to no matches between ARM and terraform being found...", terraformCompiledObject.ResourceName, terraformCompiledObject.ResourceType))
 		}
-		terraformStringConfigTotal = append(terraformStringConfigTotal, terraformStringConfigObject)
 	}
 
-	for index, terraformConfig := range terraformStringConfigTotal {
-		WriteTerraformConfigToDisk(terraformConfig.StringConfig, terraformConfig.FileName)
-		if len(terraformStringConfigTotal) == index+1 {
-			for _, terraformFileName := range terraformFileNames {
-				RunTerraformCommand("fmt", terraformFileName)
-			}
+	for _, terraformConfig := range terraformStringConfigTotal {
+		if !strings.HasSuffix(terraformConfig.FileName, "/") {
+			ReturnStatusObject.CountTerraformResources++
+			WriteTerraformConfigToDisk(terraformConfig.StringConfig, terraformConfig.FileName)
 		}
 	}
+
+	RunTerraformCommand("fmt", *rootDecompilefolderPath)
+
+	if ReturnStatusObject.CountFilesCreated > 0 {
+		logOK(fmt.Sprintf(`Successfully decompiled the following ARM to Terraform:
+ARM source file(s) location: %s
+ARM files analyzed: %d
+Terraform file(s) location: %s
+Terraform files created: %d
+Terraform resources defined: %d
+		`, *filePath, len(verifiedFiles), *rootDecompilefolderPath, ReturnStatusObject.CountFilesCreated, ReturnStatusObject.CountTerraformResources))
+	}
+}
+
+func CheckOnlineVersion(customChromePath string) {
+	HtmlBody := ""
+	url := "https://github.com/ChristofferWin/TerrafyARM/releases/"
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	opts := []func(*chromedp.ExecAllocator){}
+	if customChromePath != "" {
+		opts = append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.ExecPath(customChromePath),
+			chromedp.Flag("headless", true), // Set to false if you want to see the browser UI
+			chromedp.Flag("disable-gpu", true),
+		)
+	} else {
+		opts = append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", true), // Set to false if you want to see the browser UI
+			chromedp.Flag("disable-gpu", true),
+		)
+	}
+
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+
+	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+
+	logVerbose("Checking for new versions online")
+
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(string(url)),
+		chromedp.WaitReady("body"),                   // Wait for the body to be ready
+		chromedp.Sleep(time.Duration(2)*time.Second), // Give some time for JS to execute
+		chromedp.InnerHTML("*", &HtmlBody, chromedp.ByQueryAll),
+	)
+	if err != nil {
+		logWarning("'TerrafyARM' was not able to check for any updates, continuing...")
+		return
+	}
+
+	splitHtml := strings.Split(HtmlBody, "\n")
+	newestVersionLine := ""
+	for index, line := range splitHtml {
+		if strings.Contains(line, `a href="/ChristofferWin/TerrafyARM/releases/latest`) {
+			newestVersionLine = splitHtml[index-2]
+			break
+		}
+	}
+	newestVersion := ""
+	splitNewestVersionLine := strings.Split(newestVersionLine, " ")
+	for _, line := range splitNewestVersionLine {
+		if strings.Contains(line, `ChristofferWin/TerrafyARM/releases/tag/`) {
+			newestVersion = strings.TrimSuffix(strings.Split(line, "/")[len(strings.Split(line, "/"))-1], `"`)
+		}
+	}
+
+	if CurrentVersion != newestVersion {
+		logWarning(fmt.Sprintf("A new version '%s' of 'TerrafyARM' is ready for download, consider updating...", newestVersion))
+		logVerbose("While 'TerrafyARM' is in its early stages, you are highly encouraged to update the application right away, simply because improvements may come rapidly")
+	}
+
+	defer cancel()
 }
 
 func NewCompiledFolderStructure(seperatedFiles bool, rootFolderPath string, terraformObject TerraformObject) []string {
@@ -359,10 +493,11 @@ func NewCompiledFolderStructure(seperatedFiles bool, rootFolderPath string, terr
 	err := os.Mkdir(rootFolderPath, 0755)
 	if err != nil {
 		if !os.IsExist(err) {
-			fmt.Println("an error occured while trying to create the root directory for the decompiled files...\n", err)
+			logFatal(fmt.Sprintf("an error occured while trying to create the root directory for the decompiled files...\n%s", err))
 			return []string{}
 		}
 	}
+
 	mapOfUniqueResourceTypes := make(map[string]bool)
 	for index, compiledObject := range terraformObject.CompileObjects {
 		resourceTypeToFileName := compiledObject.FilePath
@@ -387,13 +522,17 @@ func NewCompiledFolderStructure(seperatedFiles bool, rootFolderPath string, terr
 			fullPath = fmt.Sprintf("%s/%s", rootFolderPath, fileName)
 		}
 
-		logVerbose(fmt.Sprintf("Creating the following file '%s' on location '%s'", fileName, rootFolderPath))
-		err := os.WriteFile(fullPath, []byte{}, 0644)
-		if err != nil {
-			fmt.Println("an error occured while trying to create file '%s'\n%s", fileName, err)
-			return []string{}
+		if fileName != "" && fileName != ".tf" {
+			logVerbose(fmt.Sprintf("Creating the following file '%s' on location '%s'", fileName, rootFolderPath))
+			err := os.WriteFile(fullPath, []byte{}, 0644)
+			if err != nil {
+				logVerbose(fmt.Sprintf("Error occured while trying to create file '%s'\n%s\nContinuing...", fileName, err))
+				ReturnStatusObject.CountFilesFailCreate++
+				return []string{}
+			}
+			ReturnStatusObject.CountFilesCreated++
+			terraformFilePaths = append(terraformFilePaths, fullPath)
 		}
-		terraformFilePaths = append(terraformFilePaths, fullPath)
 	}
 
 	return terraformFilePaths
@@ -468,7 +607,7 @@ func InitializeTerraformFile(terraformFilePath string, providerVersion string, p
 	Any template CAN have issues - Please report these over on Github at https://github.com/ChristofferWin/TerrafyARM/issues
 
 	As 'TerrafyArm' Progresses in development, please consolidate the releases page at https://github.com/ChristofferWin/TerrafyARM/releases 
-	`, currentVersion))
+	`, CurrentVersion))
 
 	requiredProvidersBlock := `
 	Required boilerplate - The 'version' will only be set when the argument '-provider-version' <some version> has been parsed
@@ -520,7 +659,6 @@ func InitializeTerraformFile(terraformFilePath string, providerVersion string, p
 
 	finalInitializeTerraform := fmt.Sprintf("%s\n%s\n%s\n\n%s", initialCommentBlock, requiredProvidersBlock, initialize_terraform, requiredContextBlockMaster)
 	ChangeExistingFile(terraformFilePath, finalInitializeTerraform)
-	RunTerraformCommand("fmt", terraformFilePath)
 
 	return terraformCompiledObject
 }
@@ -530,7 +668,7 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 	returnRootTerraformConfig := []string{}
 	sortedBlockAttributes := []BlockAttribute{}
 
-	rootTerraformDefinition := NewTerraformResourceDefinitionName(terraformCompiledObject.ResourceName, terraformCompiledObject.ResourceType, terraformCompiledObject.ResourceDefinitionName)
+	rootTerraformDefinition := NewTerraformResourceDefinitionName(terraformCompiledObject.ProviderName, terraformCompiledObject.ResourceType, terraformCompiledObject.ResourceDefinitionName)
 	rootTerraformConfig = append(rootTerraformConfig, rootTerraformDefinition)
 
 	if len(terraformCompiledObject.BlockAttributes) > 1 {
@@ -538,17 +676,44 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 	} else {
 		sortedBlockAttributes = terraformCompiledObject.BlockAttributes
 	}
-
-	fmt.Println("----------------------\n", terraformCompiledObject.ArmObject.Subscription_id, "\n", terraformCompiledObject.ResourceName)
-
+	/*
+		if terraformCompiledObject.ResourceName == "ruc-we-corenetwork-vnet01-to-ruc-we-ipaasintegrations-peer" {
+			for _, block := range terraformCompiledObject.BlockAttributes {
+				fmt.Println("--------------------------BLOCK", block.BlockName, block.Parent, "-----------------------")
+				for index, rootAttribute := range block.RootAttribute {
+					fmt.Println(index, "name", rootAttribute.Name, "is", rootAttribute.IsBlock, rootAttribute.BlockName, rootAttribute.UniqueBlockName, rootAttribute.Value)
+				}
+			}
+		}
+	*/
 	parentBlockName := ""
 	captureLastNestedBlocks := 0
+	countStartNestedBlock := 0
+	numberOfSameLevelNestedBlocks := 0
+	captureMaxSameLevelBlocks := 0
+	placeHolderBlockAttributes := []BlockAttribute{}
 	for index, blockAttribute := range sortedBlockAttributes {
-		placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject)
-
+		placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject, sortedBlockAttributes)
+		placeHolderBlockAttributes = AddPlaceHolderTerraformBlocks(blockAttribute.RootAttribute, placeholderAttributes, terraformCompiledObject.HtmlObject)
 		if index == 0 {
+
+			//Determine whether to auto retrieve name, resource_group_name and location
+			autoCreateName := true
+			autoCreateResourceGroupName := true
+			autoCreateLocation := true
+
+			for _, terraformRootAttribute := range blockAttribute.RootAttribute {
+				if terraformRootAttribute.Name == "name" {
+					autoCreateName = false
+				} else if terraformRootAttribute.Name == "resource_group_name" {
+					autoCreateResourceGroupName = false
+				} else if terraformRootAttribute.Name == "location" {
+					autoCreateLocation = false
+				}
+			}
+
 			for _, htmlAttribute := range terraformCompiledObject.HtmlObject.Attribute {
-				if htmlAttribute.Name == "name" && htmlAttribute.Parent == "root" {
+				if htmlAttribute.Name == "name" && htmlAttribute.Parent == "root" && autoCreateName {
 					rootAttribute := RootAttribute{
 						Name:  "name",
 						Value: terraformCompiledObject.ResourceName,
@@ -556,7 +721,7 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("", rootAttribute, false, true))
 				}
 
-				if htmlAttribute.Name == "resource_group_name" && htmlAttribute.Parent == "root" {
+				if htmlAttribute.Name == "resource_group_name" && htmlAttribute.Parent == "root" && autoCreateResourceGroupName {
 					rootAttribute := RootAttribute{
 						Name:  "resource_group_name",
 						Value: terraformCompiledObject.ArmObject.Resource_group_name,
@@ -564,7 +729,7 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("", rootAttribute, false, true))
 				}
 
-				if htmlAttribute.Name == "location" && htmlAttribute.Parent == "root" {
+				if htmlAttribute.Name == "location" && htmlAttribute.Parent == "root" && autoCreateLocation {
 					rootAttribute := RootAttribute{
 						Name:  "location",
 						Value: terraformCompiledObject.ArmObject.Location,
@@ -583,6 +748,7 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 			}
 		}
 		if blockAttribute.BlockName == "root" {
+			parentBlockName = ""
 			for _, terraformAttribute := range blockAttribute.RootAttribute {
 				if !terraformAttribute.IsBlock {
 					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("", terraformAttribute, false, true))
@@ -591,6 +757,7 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 		} else if blockAttribute.UniqueBlockName == "" && blockAttribute.BlockName != "root" {
 			mapOfIndentationCount := make(map[string]int)
 			numberOfNestedBlocks := 0
+
 			for _, minimumBlockAttribute := range sortedBlockAttributes {
 				if minimumBlockAttribute.Parent == blockAttribute.BlockName && blockAttribute.BlockName != "root" {
 					mapOfIndentationCount[blockAttribute.BlockName]++
@@ -600,6 +767,11 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 				numberOfNestedBlocks = 1
 			} else {
 				numberOfNestedBlocks = mapOfIndentationCount[blockAttribute.BlockName]
+				numberOfSameLevelNestedBlocks = mapOfIndentationCount[blockAttribute.BlockName]
+			}
+
+			if numberOfSameLevelNestedBlocks > 1 && captureMaxSameLevelBlocks == 0 {
+				captureMaxSameLevelBlocks = numberOfSameLevelNestedBlocks
 			}
 
 			for _, minimumBlockAttribute := range sortedBlockAttributes {
@@ -607,28 +779,45 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 					parentBlockName = blockAttribute.Parent
 				}
 			}
-			placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject)
+
+			placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject, []BlockAttribute{})
 			mergedRootAttributes := []RootAttribute{}
 			mergedRootAttributes = append(append(mergedRootAttributes, placeholderAttributes...), blockAttribute.RootAttribute...)
 
 			sortedRootAttributes := SortRootAttributesForTerraform(mergedRootAttributes)
+
 			terraformObjectString, nestedBlockCount := AddObjectTerraformAttributeForResourceDefinition(fmt.Sprintf("\n%s {%s", blockAttribute.BlockName, strings.Repeat(" ", numberOfNestedBlocks)), "", sortedRootAttributes, sortedBlockAttributes)
 			rootTerraformConfig = append(rootTerraformConfig, terraformObjectString)
-			if parentBlockName != "" || nestedBlockCount > 1 {
-				fmt.Println("BLOCK ATTRIBUTE:", blockAttribute.BlockName, blockAttribute.Parent, nestedBlockCount)
+			if parentBlockName != "" || nestedBlockCount > 1 && numberOfSameLevelNestedBlocks > 0 {
 				if parentBlockName != blockAttribute.Parent {
 					captureLastNestedBlocks = nestedBlockCount
 				} else if parentBlockName == blockAttribute.Parent {
-					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition(strings.Repeat("\n}", captureLastNestedBlocks), RootAttribute{}, true, false))
+					if numberOfSameLevelNestedBlocks == 1 {
+						rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition(strings.Repeat("\n}", captureLastNestedBlocks), RootAttribute{}, true, false))
+					} else {
+						rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("\n}", RootAttribute{}, true, false))
+					}
 					parentBlockName = ""
 					captureLastNestedBlocks = 0
+					numberOfSameLevelNestedBlocks--
 				}
-			} else {
-				rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("\n}", RootAttribute{}, true, false))
+			} else if numberOfSameLevelNestedBlocks == 0 {
+				if captureMaxSameLevelBlocks > 0 {
+					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition(strings.Repeat("\n}", captureMaxSameLevelBlocks), RootAttribute{}, true, false))
+				} else {
+					rootTerraformConfig = append(rootTerraformConfig, AddFlatTerraformAttributeForResourceDefinition("\n}", RootAttribute{}, true, false))
+
+				}
 			}
 
-			fmt.Println("NESTED BLOCK COUNT:", nestedBlockCount, blockAttribute.BlockName)
 		} else if blockAttribute.UniqueBlockName != "" && blockAttribute.BlockName != "root" {
+			if countStartNestedBlock == 0 {
+				countStartNestedBlock = CountBlockNestingForTerraform(sortedBlockAttributes, blockAttribute.RootAttribute)
+				if blockAttribute.Parent == "root" && countStartNestedBlock > 1 {
+					countStartNestedBlock = countStartNestedBlock + 1
+				}
+			}
+
 			match := false
 			for _, rootAttribute := range blockAttribute.RootAttribute {
 				if rootAttribute.Name == "name" {
@@ -646,69 +835,119 @@ func NewTerraformConfig(terraformCompiledObject CompileObject, seperatedResource
 				}
 				mergedRootAttributes = append(mergedRootAttributes, rootAttribute)
 			}
-			placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject)
+			placeholderAttributes := AddPlaceHolderTerraformAttributes(blockAttribute, terraformCompiledObject.HtmlObject, []BlockAttribute{})
 			mergedRootAttributes = append(append(mergedRootAttributes, placeholderAttributes...), blockAttribute.RootAttribute...)
 			sortedRootAttributes := SortRootAttributesForTerraform(mergedRootAttributes)
 			terraformObjectString, nestedBlockCount := AddObjectTerraformAttributeForResourceDefinition(fmt.Sprintf("\n%s {\n", blockAttribute.BlockName), "", sortedRootAttributes, sortedBlockAttributes)
 			rootTerraformConfig = append(rootTerraformConfig, terraformObjectString)
-			fmt.Println(len(sortedRootAttributes), "config:", rootTerraformConfig)
-
-			if blockAttribute.Parent == "root" && nestedBlockCount > 1 {
-				nestedBlockCount++
-			}
-
-			if nestedBlockCount > captureLastNestedBlocks {
-				parentBlockName = blockAttribute.BlockName
-				captureLastNestedBlocks = nestedBlockCount
-			}
 
 			if nestedBlockCount == 1 {
-				fmt.Println("HERE WE ARE:::", nestedBlockCount, captureLastNestedBlocks, blockAttribute.BlockName, blockAttribute.Parent)
-				returnRootTerraformConfig = append(returnRootTerraformConfig, strings.Repeat("\n}", captureLastNestedBlocks))
+				rootTerraformConfig = append(rootTerraformConfig, strings.Repeat("\n}", countStartNestedBlock))
+				countStartNestedBlock = 0
 			}
-
-			rootTerraformConfig = append(rootTerraformConfig, terraformObjectString)
-
-			fmt.Println("NESTED BLOCK COUNT:", nestedBlockCount, blockAttribute.BlockName)
 		}
 	}
+
+	if len(placeHolderBlockAttributes) > 0 {
+		for _, placeHolderBlockAttribute := range placeHolderBlockAttributes {
+			sortedPlaceHolderAttributes := SortRootAttributesForTerraform(placeHolderBlockAttribute.RootAttribute)
+			terraformString, _ := AddObjectTerraformAttributeForResourceDefinition(fmt.Sprintf("\n%s {", placeHolderBlockAttribute.BlockName), " ", sortedPlaceHolderAttributes, []BlockAttribute{})
+			terraformString = terraformString + "\n}"
+			rootTerraformConfig = append(rootTerraformConfig, terraformString)
+		}
+	}
+
 	if terraformCompiledObject.AliasProviderName != "" {
 
 		rootTerraformConfig = append(rootTerraformConfig, fmt.Sprintf(`
-	%sprovider = azurerm.%s	
+	provider = azurerm.%s	
 	}
-	`, "\n", terraformCompiledObject.AliasProviderName))
-	}
-
-	fmt.Println("THIS IS IT33:-------------------------------", terraformCompiledObject.ResourceName, "\n")
-	for _, line := range rootTerraformConfig {
-		fmt.Println(line)
+	`, terraformCompiledObject.AliasProviderName))
+	} else {
+		rootTerraformConfig = append(rootTerraformConfig, "\n}")
 	}
 
-	countOfOpeningBrackets := 0
-	countOfClosingBrackets := 0
-	for _, terraformConfigBlob := range rootTerraformConfig {
-		if strings.Contains(terraformConfigBlob, "{") {
-			countOfOpeningBrackets++
-		} else if strings.Contains(terraformConfigBlob, "}") {
-			countOfClosingBrackets++
+	convertTerraformSlice := strings.Split(strings.Join(rootTerraformConfig, "\n"), "\n") //Before this point, the string slice array is built out of "pockets" Of strings - Now we convert them line to line
+	for index, line := range convertTerraformSlice {
+		if line == "" && index != 0 {
+			if strings.Contains(convertTerraformSlice[index+1], "{") || strings.Contains(convertTerraformSlice[index+1], "provider") {
+				returnRootTerraformConfig = append(returnRootTerraformConfig, line)
+			}
+		} else {
+			if strings.Contains(line, "PLACE-HOLDER-VALUE\\") {
+				retrieveTerraformAttributeURL := strings.Split(line, `\`)
+				convertedTerraformLine := retrieveTerraformAttributeURL[0] + fmt.Sprintf("\" # (Link is anchored) %s", retrieveTerraformAttributeURL[1])
+				returnRootTerraformConfig = append(returnRootTerraformConfig, convertedTerraformLine)
+			} else {
+				returnRootTerraformConfig = append(returnRootTerraformConfig, line)
+			}
 		}
-		returnRootTerraformConfig = append(returnRootTerraformConfig, terraformConfigBlob)
 	}
-	if countOfOpeningBrackets > 1 {
-		if difference := countOfOpeningBrackets - countOfClosingBrackets; difference == 2 {
-			returnRootTerraformConfig = append(returnRootTerraformConfig, "}")
+	returnRootTerraformStringConfig := ""
+	if len(returnRootTerraformConfig) > 0 {
+		if len(returnRootTerraformConfig) == 5 {
+			match := false
+			for index, line := range returnRootTerraformConfig {
+				if index != 0 && len(line) > 1 && !strings.Contains(line, "provider") && !strings.Contains(line, "}") {
+					match = true
+				}
+			}
+			if match {
+				returnRootTerraformStringConfig = strings.Join(returnRootTerraformConfig, "\n")
+			}
+		} else {
+			returnRootTerraformStringConfig = strings.Join(returnRootTerraformConfig, "\n")
 		}
-	} else if countOfClosingBrackets == 0 {
-		returnRootTerraformConfig = append(returnRootTerraformConfig, "}")
+		return returnRootTerraformStringConfig
 	}
-
-	//fmt.Println("COUNT OF OEPNINGB", countOfOpeningBrackets, countOfClosingBrackets, terraformCompiledObject.ResourceName)
-
-	return strings.Join(returnRootTerraformConfig, "\n")
+	return ""
 }
 
-func AddPlaceHolderTerraformAttributes(blockAttribute BlockAttribute, htmlObject HtmlObject) []RootAttribute {
+func AddPlaceHolderTerraformBlocks(terraformAttributes []RootAttribute, placeholderAttributes []RootAttribute, htmlObject HtmlObject) []BlockAttribute {
+	mapOfRootAttributesForBlocks := make(map[string][]RootAttribute)
+	returnPlaceHolderBlocks := []BlockAttribute{}
+	terraformAttributesNotFound := []RootAttribute{}
+
+	for _, placeholderAttribute := range placeholderAttributes {
+		match := false
+		for _, terraformAttribute := range terraformAttributes {
+			if placeholderAttribute.Name == terraformAttribute.Name {
+				match = true
+				break
+			}
+		}
+		if !match {
+			terraformAttributesNotFound = append(terraformAttributesNotFound, placeholderAttribute)
+		}
+
+	}
+
+	for _, terraformAttribute := range terraformAttributesNotFound {
+		for _, attribute := range htmlObject.Attribute {
+			if terraformAttribute.Name == attribute.Parent && attribute.Type != "armObject" && attribute.Required {
+				rootAttribute := RootAttribute{
+					Name:      attribute.Name,
+					Value:     fmt.Sprintf("value from ARM NOT FOUND BUT REQUIRED, see link for help (TOP OF THE PAGE) => \\%s", attribute.TerraformURL),
+					BlockName: attribute.Parent,
+					IsBlock:   false,
+				}
+				mapOfRootAttributesForBlocks[terraformAttribute.Name] = append(mapOfRootAttributesForBlocks[terraformAttribute.Name], rootAttribute)
+			}
+		}
+	}
+
+	for blockName, requiredRootAttributes := range mapOfRootAttributesForBlocks {
+		blockAttribute := BlockAttribute{
+			BlockName:     blockName,
+			RootAttribute: requiredRootAttributes,
+			Parent:        "root",
+		}
+		returnPlaceHolderBlocks = append(returnPlaceHolderBlocks, blockAttribute)
+	}
+	return returnPlaceHolderBlocks
+}
+
+func AddPlaceHolderTerraformAttributes(blockAttribute BlockAttribute, htmlObject HtmlObject, allBlocks []BlockAttribute) []RootAttribute {
 	allRequiredAttributes := []Attribute{}
 	mapOfMissingAttributes := make(map[string]bool)
 	returnRootAttributes := []RootAttribute{}
@@ -723,7 +962,6 @@ func AddPlaceHolderTerraformAttributes(blockAttribute BlockAttribute, htmlObject
 		for _, terraformAttribute := range blockAttribute.RootAttribute {
 			if terraformAttribute.Name == requiredAttribute.Name {
 				mapOfMissingAttributes[requiredAttribute.Name] = true
-				break
 			}
 
 			if !mapOfMissingAttributes[requiredAttribute.Name] {
@@ -735,10 +973,10 @@ func AddPlaceHolderTerraformAttributes(blockAttribute BlockAttribute, htmlObject
 	for name, isFound := range mapOfMissingAttributes {
 		if !isFound {
 			for _, requiredAttribute := range allRequiredAttributes {
-				if name == requiredAttribute.Name {
+				if name == requiredAttribute.Name && requiredAttribute.Type != "armObject" {
 					rootAttribute := RootAttribute{
 						Name:            requiredAttribute.Name,
-						Value:           "PLACE-HOLDER-VALUE",
+						Value:           fmt.Sprintf("value from ARM NOT FOUND BUT REQUIRED, see link for help (TOP OF THE PAGE) => \\%s", requiredAttribute.TerraformURL),
 						BlockName:       requiredAttribute.Parent,
 						IsBlock:         false,
 						UniqueBlockName: blockAttribute.UniqueBlockName,
@@ -748,17 +986,51 @@ func AddPlaceHolderTerraformAttributes(blockAttribute BlockAttribute, htmlObject
 			}
 		}
 	}
+
+	mapOfRequiredAttributes := make(map[string]int)
+	for _, block := range allBlocks {
+		for _, requiredAttribute := range allRequiredAttributes {
+			if requiredAttribute.Type == "armObject" {
+				mapOfRequiredAttributes[requiredAttribute.Name]++
+				if block.BlockName == requiredAttribute.Name && block.UniqueBlockName == "" {
+					mapOfRequiredAttributes[requiredAttribute.Name]++
+					break
+				}
+			}
+		}
+	}
+
+	for blockName, count := range mapOfRequiredAttributes {
+		if count == 1 {
+			attribute := Attribute{}
+			for _, requiredAttribute := range allRequiredAttributes {
+				if requiredAttribute.Name == blockName && requiredAttribute.Type == "armObject" {
+					attribute = requiredAttribute
+				}
+			}
+			rootAttribute := RootAttribute{
+				Name:      attribute.Name,
+				Value:     nil,
+				BlockName: "root",
+				IsBlock:   true,
+			}
+			returnRootAttributes = append(returnRootAttributes, rootAttribute)
+		}
+	}
+
 	return returnRootAttributes
 }
 
 func SortBlockAttributesForTerraform(blockAttributesToSort []BlockAttribute) []BlockAttribute {
 	blocksForReturn := []BlockAttribute{}
+	//runWithoutUniqueBlocks := true
 	for _, blockAttribute := range blockAttributesToSort {
 		if blockAttribute.BlockName == "root" && blockAttribute.Parent == "root" {
 			blocksForReturn = append(blocksForReturn, blockAttribute)
 			break
 		}
 	}
+
 	//For all terraform objects, where no unique names are present
 	for _, blockAttribute := range blockAttributesToSort {
 		if blockAttribute.BlockName != "root" && blockAttribute.Parent == "root" && blockAttribute.UniqueBlockName == "" {
@@ -796,17 +1068,18 @@ func SortBlockAttributesForTerraform(blockAttributesToSort []BlockAttribute) []B
 	for index, blockAttribute := range blocksForReturn {
 		if index != 0 {
 			if blocksForReturn[index].Parent != blocksForReturn[index-1].BlockName && blockAttribute.Parent != "root" {
-				reverseBlockFirst := blocksForReturn[index]
-				reverseBlockSecond := blocksForReturn[index+1]
-				blocksForReturn[index] = reverseBlockSecond
-				blocksForReturn[index+1] = reverseBlockFirst
+				if len(blocksForReturn) != index+1 {
+					reverseBlockFirst := blocksForReturn[index]
+					reverseBlockSecond := blocksForReturn[index+1]
+					blocksForReturn[index] = reverseBlockSecond
+					blocksForReturn[index+1] = reverseBlockFirst
+				}
 			}
 		}
 	}
 
 	removedShadowRootBlocks := []BlockAttribute{}
 
-	//match := false
 	for index, blockAttribute := range blocksForReturn {
 		if blockAttribute.BlockName != "root" && blocksForReturn[index-1].BlockName == "root" && blockAttribute.UniqueBlockName == "" {
 			removedShadowRootBlocks = append(removedShadowRootBlocks, blocksForReturn[index-1:]...)
@@ -814,6 +1087,22 @@ func SortBlockAttributesForTerraform(blockAttributesToSort []BlockAttribute) []B
 		} else {
 			removedShadowRootBlocks = blocksForReturn
 			break
+		}
+	}
+	mapOfSameLevelBlockCount := make(map[string]int)
+	for _, blockAttribute := range removedShadowRootBlocks {
+		if blockAttribute.UniqueBlockName == "" && blockAttribute.BlockName != "root" {
+			for _, innerBlockAttribute := range removedShadowRootBlocks {
+				if innerBlockAttribute.UniqueBlockName == "" && innerBlockAttribute.BlockName != "root" && innerBlockAttribute.Parent == blockAttribute.BlockName {
+					mapOfSameLevelBlockCount[blockAttribute.BlockName]++
+				}
+			}
+		}
+	}
+
+	for _, blockAttribute := range removedShadowRootBlocks {
+		if mapOfSameLevelBlockCount[blockAttribute.BlockName] == 0 {
+			mapOfSameLevelBlockCount[blockAttribute.BlockName]++
 		}
 	}
 
@@ -853,11 +1142,6 @@ func NewTerraformResourceDefinitionName(terraformResourceName string, terraformR
 
 func AddObjectTerraformAttributeForResourceDefinition(terraformBlock string, indentation string, terraformAttributes []RootAttribute, allTerraformBlocks []BlockAttribute) (string, int) {
 	terraformFlatAttributes := []string{}
-	countOfNestedObjects := 1
-
-	if terraformAttributes[0].BlockName == "delegation" {
-		fmt.Println("THESE ARE ALL THE ROOTS:", terraformAttributes)
-	}
 
 	for index, terraformAttribute := range terraformAttributes {
 		if !terraformAttribute.IsBlock && index == 0 {
@@ -870,19 +1154,22 @@ func AddObjectTerraformAttributeForResourceDefinition(terraformBlock string, ind
 		}
 	}
 
-	mapOfUniqueBlocks := make(map[string]bool)
-	for _, terraformAttribute := range terraformAttributes {
+	return strings.Join(terraformFlatAttributes, "\n"), CountBlockNestingForTerraform(allTerraformBlocks, terraformAttributes)
+}
+
+func CountBlockNestingForTerraform(terraformBlockAttributes []BlockAttribute, currentTerraformAttributes []RootAttribute) int {
+	countOfNestedObjects := 1
+	for _, terraformAttribute := range currentTerraformAttributes {
 		if terraformAttribute.IsBlock {
-			for _, blockAttribute := range allTerraformBlocks {
-				if terraformAttribute.BlockName == blockAttribute.BlockName && !mapOfUniqueBlocks[fmt.Sprintf("%s,%s", terraformAttribute.BlockName, terraformAttribute.UniqueBlockName)] {
-					mapOfUniqueBlocks[fmt.Sprintf("%s,%s", terraformAttribute.BlockName, terraformAttribute.UniqueBlockName)] = true
+			for _, blockAttribute := range terraformBlockAttributes {
+				if terraformAttribute.BlockName == blockAttribute.BlockName && terraformAttribute.UniqueBlockName == blockAttribute.UniqueBlockName {
 					countOfNestedObjects++
 				}
 			}
 		}
 	}
 
-	return strings.Join(terraformFlatAttributes, "\n"), countOfNestedObjects
+	return countOfNestedObjects
 }
 
 func AddFlatTerraformAttributeForResourceDefinition(terraformBlock string, terraformAttribute RootAttribute, endTerraformDefinition bool, noNewLine bool) string {
@@ -890,10 +1177,15 @@ func AddFlatTerraformAttributeForResourceDefinition(terraformBlock string, terra
 	terraformStringValue := ""
 
 	if valueTypeName == "string" {
-		if terraformAttribute.Value == "PLACE-HOLDER-VALUE" {
-			terraformStringValue = fmt.Sprintf("%s #This value is NOT valid for deployment, as it could not be located in the arm template related to the resource... Please replace this value with the correct one as its REQUIRED", terraformAttribute.Value)
-		} else {
-			terraformStringValue = terraformAttribute.Value.(string)
+		patternEscapeChars := regexp.MustCompile(`[\\"]`)
+		terraformStringValue = terraformAttribute.Value.(string)
+		terraformStringValue = patternEscapeChars.ReplaceAllString(terraformStringValue, "")
+
+		if strings.HasPrefix(terraformStringValue, "Microsoft.") && terraformAttribute.Name == "name" {
+			splitName := strings.Split(terraformStringValue, ".")
+			if len(splitName) == 3 {
+				terraformStringValue = fmt.Sprintf("%s/%s", strings.Join(splitName[:2], "."), splitName[2])
+			}
 		}
 	}
 
@@ -905,11 +1197,9 @@ func AddFlatTerraformAttributeForResourceDefinition(terraformBlock string, terra
 				convertedValue := ConvertGoSliceToTerraformList(terraformAttribute.Value.([]interface{}))
 				return fmt.Sprintf("%s\n%s = %v", terraformBlock, terraformAttribute.Name, convertedValue)
 			} else if valueTypeName == "int" || valueTypeName == "float" {
-				if strings.Contains(terraformAttribute.Descriptor, "number") {
-					return fmt.Sprintf("%s\n%s = %f", terraformBlock, terraformAttribute.Name, terraformAttribute.Value)
-				}
+				return fmt.Sprintf("%s\n%s = %s", terraformBlock, terraformAttribute.Name, fmt.Sprintf("%.2f", terraformAttribute.Value.(float64)))
 			} else {
-				return fmt.Sprintf("%s\n%s = \"%s\"", terraformBlock, terraformAttribute.Name, terraformAttribute.Value)
+				return fmt.Sprintf("%s\n%s = \"%s\"", terraformBlock, terraformAttribute.Name, terraformStringValue)
 			}
 		} else {
 			if endTerraformDefinition {
@@ -924,24 +1214,19 @@ func AddFlatTerraformAttributeForResourceDefinition(terraformBlock string, terra
 				convertedValue := ConvertGoSliceToTerraformList(terraformAttribute.Value.([]interface{}))
 				return fmt.Sprintf("\n%s = %v", terraformAttribute.Name, convertedValue)
 			} else if valueTypeName == "int" || valueTypeName == "float" {
-				if strings.Contains(terraformAttribute.Descriptor, "number") {
-					if valueTypeName == "int" {
-						return fmt.Sprintf("%s\n%s = %d", terraformBlock, terraformAttribute.Name, terraformAttribute.Value)
-					} else {
-						return fmt.Sprintf("%s\n%s = %f", terraformBlock, terraformAttribute.Name, terraformAttribute.Value)
-					}
-				} else {
-					return fmt.Sprintf("%s\n%s = %s", terraformBlock, terraformAttribute.Name, fmt.Sprintf("%f", terraformAttribute.Value.(float64)))
-				}
+				return fmt.Sprintf("%s\n%s = %s", terraformBlock, terraformAttribute.Name, fmt.Sprintf("%.2f", terraformAttribute.Value.(float64)))
 			}
 		}
 	}
 
-	if noNewLine {
-		return fmt.Sprintf("%s = \"%s\"", terraformAttribute.Name, terraformStringValue)
+	if !CheckForEmptyArmValue(terraformAttribute.Value) {
+		if noNewLine {
+			return fmt.Sprintf("%s = \"%s\"", terraformAttribute.Name, terraformStringValue)
+		} else {
+			return fmt.Sprintf("\n%s = \"%s\"", terraformAttribute.Name, terraformStringValue)
+		}
 	}
-	return fmt.Sprintf("\n%s = \"%s\"", terraformAttribute.Name, terraformStringValue)
-
+	return ""
 }
 
 func ConvertGoSliceToTerraformList(terraformAttribute []interface{}) string {
@@ -998,28 +1283,28 @@ func RunTerraformCommand(terraformCommand string, terraformFilePath string) {
 	if !CheckForTerraformExecuteable() {
 		return
 	}
-	splitPath := strings.Split(terraformFilePath, "/")
-	finalPath := strings.Join(splitPath[:len(splitPath)-1], "/")
-	finalCommand := terraformCommand
-	command := exec.Command("terraform", finalCommand)
-	command.Dir = finalPath
-	_, err := command.CombinedOutput()
+	// Run the command
+	cmd := exec.Command("terraform", terraformCommand)
+	cmd.Dir = terraformFilePath // Set the directory where the command will run
+
+	// Capture the combined output
+	_, err := cmd.CombinedOutput()
 	if err != nil {
-		logVerbose(fmt.Sprintf("an error occured while trying to run command '%s\n%s'", terraformCommand, err))
+		return
 	}
 }
 
 func ChangeExistingFile(filePath string, text string) (int, error) {
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Fatalf("an error occured while trying to open the file '%s'\n%s", filePath, err)
+		logFatal(fmt.Sprintf("an error occured while trying to open the file '%s'\n%s", filePath, err))
 	}
 
 	defer file.Close() //Make sure to close the file as the last part of the function call
 
 	numberOfLines, err := file.WriteString(text)
 	if err != nil {
-		log.Fatalf("an error occured while trying to write to file '%s'\n%s", filePath, err)
+		logFatal(fmt.Sprintf("an error occured while trying to write to file '%s'\n%s", filePath, err))
 	}
 
 	return numberOfLines, nil
@@ -1031,7 +1316,7 @@ func ImportArmFile(filePath *string) ([][]byte, error) {
 	var files [][]byte
 	fileInfo, err := os.Stat(*filePath)
 	if err != nil {
-		fmt.Println("Error while trying to retrieve ARM json files on path:", string(*filePath), "\nStacktrace:", err)
+		logFatal(fmt.Sprintf("Error while trying to retrieve ARM json files on path:", string(*filePath), "\n%s", err))
 	}
 
 	isDir := fileInfo.IsDir()
@@ -1041,7 +1326,7 @@ func ImportArmFile(filePath *string) ([][]byte, error) {
 		files, err := os.ReadDir(*filePath)
 
 		if err != nil {
-			fmt.Println("Error while trying to retrieve ARM json files on path:", string(*filePath), "\nStacktrace:", err)
+			logFatal(fmt.Sprintf("Error while trying to retrieve ARM json files on path:", string(*filePath), "\n%s", err))
 		}
 
 		for _, file := range files {
@@ -1057,7 +1342,7 @@ func ImportArmFile(filePath *string) ([][]byte, error) {
 	for _, fileName := range fileNames {
 		file, err := os.ReadFile(fileName)
 		if err != nil {
-			fmt.Println("Error while trying to retrieve ARM json content on file:", string(fileName), "\nStracktrace:", err)
+			logFatal(fmt.Sprintf("Error while trying to retrieve ARM json content on file:", string(fileName), "\n%s", err))
 		}
 
 		files = append(files, file)
@@ -1071,6 +1356,8 @@ func VerifyArmFile(filecontent [][]byte) [][]byte {
 	var validJson [][]byte
 	var cleanFilecontent [][]byte
 	var armMatch bool
+
+	ReturnStatusObject.CountAnalyzedARMTemplates++
 
 	for _, fileContent := range filecontent {
 		err := json.Unmarshal(fileContent, &jsonDump)
@@ -1110,6 +1397,7 @@ func VerifyArmFile(filecontent [][]byte) [][]byte {
 			cleanFilecontent = append(cleanFilecontent, cleanContent)
 		}
 	}
+
 	return cleanFilecontent
 }
 
@@ -1123,7 +1411,7 @@ func GetArmBaseInformation(filecontent [][]byte) []ArmObject {
 		err := json.Unmarshal(bytes, &jsonInterface)
 
 		if err != nil {
-			fmt.Println("Error while transforming file from bytes to json:", err)
+			logFatal(fmt.Sprintf("Error while transforming file from bytes to json: %s", err))
 		}
 
 		switch v := jsonInterface.(type) {
@@ -1145,22 +1433,25 @@ func GetArmBaseInformation(filecontent [][]byte) []ArmObject {
 
 				if jsonMap["kind"] != nil && strings.Contains(strings.ToLower(jsonMap["type"].(string)), "web/sites") {
 					specialResourceType = GetArmWebAndComputeKind(jsonMap["kind"])
-				} else if strings.ToLower(jsonMap["type"].(string)) == "microsoft.compute/virtualmachines" {
-					specialResourceType = GetArmWebAndComputeKind(jsonMap["properties"])
+				} else if CheckForString(jsonMap["type"]) {
+					if strings.ToLower(jsonMap["type"].(string)) == "microsoft.compute/virtualmachines" {
+						specialResourceType = GetArmWebAndComputeKind(jsonMap["properties"])
+					}
 				}
 
-				armObject := ArmObject{
-					Name:                  jsonMap["name"].(string),
-					Resource_id:           jsonMap["id"].(string),
-					Resource_types:        append(uniqueArmResourceTypes, jsonMap["type"].(string)),
-					Location:              jsonMap["location"].(string),
-					Resource_group_name:   strings.Split(jsonMap["id"].(string), "/")[4],
-					Properties:            jsonMap["properties"],
-					Special_resource_type: specialResourceType,
-					Subscription_id:       strings.Split(jsonMap["id"].(string), "/")[2],
+				if CheckForString(jsonMap["type"]) && CheckForString(jsonMap["name"]) && CheckForString(jsonMap["id"]) {
+					armObject := ArmObject{
+						Name:                  jsonMap["name"].(string),
+						Resource_id:           jsonMap["id"].(string),
+						Resource_types:        append(uniqueArmResourceTypes, jsonMap["type"].(string)),
+						Location:              jsonMap["location"].(string),
+						Resource_group_name:   strings.Split(jsonMap["id"].(string), "/")[4],
+						Properties:            jsonMap["properties"],
+						Special_resource_type: specialResourceType,
+						Subscription_id:       strings.Split(jsonMap["id"].(string), "/")[2],
+					}
+					armBasicObjects = append(armBasicObjects, armObject)
 				}
-				armBasicObjects = append(armBasicObjects, armObject)
-
 			}
 		case []interface{}:
 			{
@@ -1181,21 +1472,24 @@ func GetArmBaseInformation(filecontent [][]byte) []ArmObject {
 
 					if jsonMap["kind"] != nil && strings.Contains(strings.ToLower(jsonMap["type"].(string)), "web/sites") {
 						specialResourceType = GetArmWebAndComputeKind(jsonMap["kind"])
-					} else if strings.ToLower(jsonMap["type"].(string)) == "microsoft.compute/virtualmachines" {
-						specialResourceType = GetArmWebAndComputeKind(jsonMap["properties"])
+					} else if CheckForString(jsonMap["type"]) {
+						if strings.ToLower(jsonMap["type"].(string)) == "microsoft.compute/virtualmachines" {
+							specialResourceType = GetArmWebAndComputeKind(jsonMap["properties"])
+						}
 					}
-
-					armObject := ArmObject{
-						Name:                  jsonMap["name"].(string),
-						Resource_id:           jsonMap["id"].(string),
-						Resource_types:        append(uniqueArmResourceTypes, jsonMap["type"].(string)),
-						Location:              jsonMap["location"].(string),
-						Resource_group_name:   strings.Split(jsonMap["id"].(string), "/")[4],
-						Properties:            jsonMap["properties"],
-						Special_resource_type: specialResourceType,
-						Subscription_id:       strings.Split(jsonMap["id"].(string), "/")[2],
+					if CheckForString(jsonMap["type"]) && CheckForString(jsonMap["name"]) && CheckForString(jsonMap["id"]) {
+						armObject := ArmObject{
+							Name:                  jsonMap["name"].(string),
+							Resource_id:           jsonMap["id"].(string),
+							Resource_types:        append(uniqueArmResourceTypes, jsonMap["type"].(string)),
+							Location:              jsonMap["location"].(string),
+							Resource_group_name:   strings.Split(jsonMap["id"].(string), "/")[4],
+							Properties:            jsonMap["properties"],
+							Special_resource_type: specialResourceType,
+							Subscription_id:       strings.Split(jsonMap["id"].(string), "/")[2],
+						}
+						armBasicObjects = append(armBasicObjects, armObject)
 					}
-					armBasicObjects = append(armBasicObjects, armObject)
 				}
 			}
 		}
@@ -1289,7 +1583,6 @@ func GetArmWebAndComputeKind(armPropertyValue interface{}) string {
 			}
 		}
 	}
-
 	returnArmKind = tempReturnArmKind
 
 	return returnArmKind
@@ -1375,21 +1668,14 @@ func ConvertArmToTerraformProvider(resourceType string, specialResouceType strin
 		if strings.ToLower(strings.Split(resourceTypeLower, "/")[1]) == "serverfarms" {
 			convertResourceTypeTempName = "service_plan" //Static conversion
 		} else if specialResouceType != "" {
-			attributePartName := strings.Split(specialResouceType, "/")
-			if attributePartName[0] == "app" && attributePartName[1] == "linux" {
-				convertResourceTypeTempName = fmt.Sprintf("%s_%s_%s", attributePartName[1], "web", attributePartName[0])
-			} else if attributePartName[0] == "app" && attributePartName[1] == "windows" {
-				convertResourceTypeTempName = fmt.Sprintf("%s_%s_%s", attributePartName[1], "web", attributePartName[0])
-			} else if attributePartName[0] == "func" && attributePartName[1] == "linux" {
-				convertResourceTypeTempName = fmt.Sprintf("%s_%s_%s", attributePartName[1], "function", attributePartName[0])
-			} else if attributePartName[0] == "func" && attributePartName[1] == "windows" {
-				convertResourceTypeTempName = fmt.Sprintf("%s_%s_%s", attributePartName[1], "function", attributePartName[0])
+			attributePartName := strings.Split(specialResouceType, "_")
+			if len(attributePartName) > 2 {
+				convertResourceTypeTempName = specialResouceType
 			}
 		}
 	} else if checkNamesForCompute.MatchString(resourceTypeLower) {
 		if specialResouceType != "" {
 			convertResourceTypeTempName = strings.ToLower(specialResouceType)
-			//convertResourceTypeTempName = fmt.Sprintf("%s_%s", attributePartName[1], resourceNameBaseConversion[1])
 		}
 	} else if checkNamesForLogAnalytics.MatchString(resourceTypeLower) {
 		if len(resourceNameBaseConversion) > 2 {
@@ -1541,7 +1827,7 @@ func ConvertArmAttributeName(armPropertyName string, armPropertyValue interface{
 	return returnConvertedName
 }
 
-func GetRawHtml(resourceType string, providerVersion string) (string, error) {
+func GetRawHtml(resourceType string, providerVersion string, customChromePath string) (string, error) {
 	var HtmlBody string
 	var HtmlBodyCompare string
 	var convertResourceTypeName string
@@ -1579,25 +1865,34 @@ func GetRawHtml(resourceType string, providerVersion string) (string, error) {
 	*/
 
 	// Create a new Chrome instance
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true), // Set to false if you want to see the browser UI
-		chromedp.Flag("disable-gpu", true),
-	)
+	opts := []func(*chromedp.ExecAllocator){}
+	if customChromePath == "" {
+		opts = append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", true), // Set to false if you want to see the browser UI
+			chromedp.Flag("disable-gpu", true),
+		)
+	} else {
+		opts = append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.ExecPath(customChromePath),
+			chromedp.Flag("headless", true), // Set to false if you want to see the browser UI
+			chromedp.Flag("disable-gpu", true),
+		)
+	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
 
 	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 	defer cancel()
 
 	url := fmt.Sprintf("https://registry.terraform.io/providers/hashicorp/azurerm/%s/docs/resources/%s", providerVersion, convertResourceTypeName)
-	fmt.Println(url)
+	logVerbose(fmt.Sprintf("Retrieving terraform information from: %s", url))
+	HtmlBaseURL = url
 
 	for x := 1; x < 25; x++ {
 		err := chromedp.Run(taskCtx,
 			chromedp.Navigate(string(url)),
 			chromedp.WaitReady("body"),                   // Wait for the body to be ready
-			chromedp.Sleep(time.Duration(x)*time.Second), // Give some time for JS to execute
+			chromedp.Sleep(time.Duration(x)*time.Second), // Give some time for JS to execute - first 1 second, then 2, etc...
 			chromedp.InnerHTML("*", &HtmlBody, chromedp.ByQueryAll),
 		)
 
@@ -1605,7 +1900,7 @@ func GetRawHtml(resourceType string, providerVersion string) (string, error) {
 			return "", err
 		}
 
-		if bytes.Equal([]byte(HtmlBody), []byte(HtmlBodyCompare)) {
+		if bytes.Equal([]byte(HtmlBody), []byte(HtmlBodyCompare)) { //The moment
 			break
 		}
 
@@ -1614,14 +1909,15 @@ func GetRawHtml(resourceType string, providerVersion string) (string, error) {
 	}
 
 	if strings.Contains(HtmlBodyCompare, "not-found") {
-		fmt.Println("Warning: The resource:", convertResourceTypeName, "could not be found at provider version:", providerVersion)
-		fmt.Println("Verbose: The resource type:", resourceType, "could not be found..\nThis might be due to an invalid translation...\nIf so, please create a github issue at: https://github.com/ChristofferWin/TerrafyARM/issues")
+		logWarning(fmt.Sprintf("The resource: %s could not be found at provider version: %s", convertResourceTypeName, providerVersion))
+		logVerbose(fmt.Sprintf("The resource type: %s could not be found..\nThis might be due to an invalid translation...\nIf so, please create a github issue at: https://github.com/ChristofferWin/TerrafyARM/issues", convertResourceTypeName))
+		ReturnStatusObject.CountNotFoundResourceType++
 		return "not_found", nil
 	}
 	return HtmlBodyCompare, nil
 }
 
-func SortRawHtml(rawHtml string, resourceType string) HtmlObject { //See the struct type definitions towards the top of the file
+func SortRawHtml(rawHtml string, resourceType string, logTime string, countResourceTypes int) HtmlObject { //See the struct type definitions towards the top of the file
 	//var uniqueAttributeNames []string
 	var uniqueHtmlAttributes []Attribute
 	var allHtmlAttributes []Attribute
@@ -1649,11 +1945,17 @@ func SortRawHtml(rawHtml string, resourceType string) HtmlObject { //See the str
 		}
 		blockNameStringSubMatchInner := []string{}
 		if strings.Contains(line, "block supports") && len(blockNameStringSubMatch) > 1 {
+			required := false
+
+			if checkForRequired := regexp.MustCompile(`\b(Required)\b`); checkForRequired.MatchString(line) {
+				required = true
+			}
 			htmlAttribute := Attribute{
 				Name:       blockNameStringSubMatch[1],
 				Type:       "armObject",
 				Parent:     "",
 				Descriptor: descriptor,
+				Required:   required,
 			}
 			allHtmlAttributes = append(allHtmlAttributes, htmlAttribute)
 		} else if !antiPatternBlockName.MatchString(line) && len(blockNameStringSubMatch) > 1 {
@@ -1682,11 +1984,12 @@ func SortRawHtml(rawHtml string, resourceType string) HtmlObject { //See the str
 				typeOfHtmlAttribute = "string"
 			}
 			htmlAttiribute := Attribute{
-				Name:       blockNameStringSubMatch[1],
-				Type:       typeOfHtmlAttribute,
-				Parent:     parentName,
-				Descriptor: descriptor,
-				Required:   required,
+				Name:         blockNameStringSubMatch[1],
+				Type:         typeOfHtmlAttribute,
+				Parent:       parentName,
+				Descriptor:   descriptor,
+				Required:     required,
+				TerraformURL: fmt.Sprintf("%s#%s-1", HtmlBaseURL, blockNameStringSubMatch[1]),
 			}
 			allHtmlAttributes = append(allHtmlAttributes, htmlAttiribute)
 		}
@@ -1758,8 +2061,10 @@ func SortRawHtml(rawHtml string, resourceType string) HtmlObject { //See the str
 	}
 	//Adding all the sorted attributes to the final return armObject
 	htmlObject := HtmlObject{
-		Resource_type: resourceType,
-		Attribute:     uniqueHtmlAttributes,
+		Resource_type:           resourceType,
+		Attribute:               uniqueHtmlAttributes,
+		Last_updated:            logTime,
+		CountOfArmResourceTypes: countResourceTypes,
 	}
 
 	return htmlObject
@@ -1790,7 +2095,8 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 	var htmlObjectCaptureRootArmResources HtmlObject
 	var htmlObjectCaptureNestedArmResources HtmlObject
 	var masterKeyRoot string
-	//var notPartOfRoot bool
+
+	//fmt.Println(htmlObjects, len(htmlObjects))
 
 	for _, armBasicObject := range armBasicObjects {
 		var htmlObjectCaptures []HtmlObject
@@ -1799,6 +2105,7 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 		blockObjectsSeperatedResources := []BlockAttribute{}
 		rootAttributesFromNestedResources := []RootAttribute{}
 		rootAttributesFromSeperatedResources := []RootAttribute{}
+		mapOfRootAttributes := make(map[string][]RootAttribute)
 
 		resourceTypes := []string{}
 		resourceTypesModified := []string{}
@@ -1859,7 +2166,6 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 				}
 
 			} else if !(len(strings.Split(armResourceType.Resource_type, "/")) == 2) && strings.Contains(armResourceType.Resource_type, "/") {
-				//notPartOfRoot = true
 				captureHtml := HtmlObject{}
 				for _, htmlObject := range htmlObjectCaptures {
 					if armResourceType.Resource_type == htmlObject.Resource_type {
@@ -1876,9 +2182,11 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 						}
 					}
 					retrievePartOfArmProperties := armBasicObject.Properties.(map[string]interface{})[keyForSubType]
-					for _, slice := range retrievePartOfArmProperties.([]interface{}) {
-						masterKey = GetArmMasterKey(slice)
-						rootAttributesFromSeperatedResources = append(rootAttributesFromSeperatedResources, GetInnerRootAttributes(slice, captureHtml, masterKey, keyForSubType)...)
+					if CheckForSliceWithMaps(retrievePartOfArmProperties) {
+						for _, slice := range retrievePartOfArmProperties.([]interface{}) {
+							masterKey = GetArmMasterKey(slice)
+							mapOfRootAttributes[masterKey] = append(rootAttributesFromSeperatedResources, GetInnerRootAttributes(slice, captureHtml, masterKey, keyForSubType)...)
+						}
 					}
 				}
 			} else {
@@ -1963,11 +2271,18 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 				//This switch is not supported yet
 				return nil
 			} else {
-				resourceName := ""
-				if masterKey == "" || armResourceType.CanBeSeperated {
-					resourceName = armBasicObject.Name
-				} else {
-					resourceName = masterKey
+				if armResourceType.Resource_type == "Microsoft.Resources/resourceGroups" {
+					rootAttribute := RootAttribute{
+						Name:      "name",
+						Value:     armBasicObject.Name,
+						BlockName: "root",
+					}
+					blockAttribute := BlockAttribute{
+						BlockName:     "root",
+						RootAttribute: []RootAttribute{rootAttribute},
+						Parent:        "root",
+					}
+					blockObjectsRootResources = append(blockObjectsRootResources, blockAttribute)
 				}
 				keyPartName := ConvertArmAttributeName(keyForSubType, "")
 				if armResourceType.Parent == "root" || armResourceType.CanBeSeperated {
@@ -1984,9 +2299,13 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 					resourceFileName = fmt.Sprintf("%s.tf", keyPartName)
 				}
 
+				if resourceFileName == ".tf" {
+					resourceFileName = ""
+				}
+
 				if armResourceType.Parent == "root" {
 					for _, innerArmResourceType := range allResourceTypes {
-						if strings.Contains(innerArmResourceType.Resource_type, armResourceType.Resource_type) && armResourceType.Resource_type != innerArmResourceType.Resource_type && innerArmResourceType.CanBeSeperated {
+						if strings.Contains(innerArmResourceType.Resource_type, armResourceType.Resource_type) && armResourceType.Resource_type != innerArmResourceType.Resource_type && innerArmResourceType.CanBeSeperated && len(blockObjectsRootResources) == 0 {
 							blockObjectsRootResources = append(blockObjectsRootResources, GetBlocksFromRootAttributes(rootAttributesForReturn, htmlObjectCaptureRootArmResources, true)...)
 							break
 						}
@@ -1995,46 +2314,69 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 					if len(blockObjectsRootResources) == 0 {
 						blockObjectsRootResources = append(blockObjectsRootResources, GetBlocksFromRootAttributes(rootAttributesForReturn, htmlObjectCaptureRootArmResources, false)...)
 					}
-
-					compileObjectRootResources := CompileObject{
-						ResourceDefinitionName: "azurerm", //Must be changed from static the moment the decompiler supports more than just azurerm
-						ArmObject:              armBasicObject,
-						Variables:              nil,
-						BlockAttributes:        blockObjectsRootResources,
-						SeperatedResource:      false,
-						FilePath:               resourceFileName,
-						ResourceType:           strings.Replace(resourceFileName, ".tf", "", 1),
-						ResourceName:           masterKeyRoot,
-						IsRoot:                 true,
-						HtmlObject:             htmlObjectCaptureRootArmResources,
+					htmlCapture := HtmlObject{}
+					if len(blockObjectsRootResources) > 0 {
+						if armResourceType.Resource_type == "Microsoft.Resources/resourceGroups" {
+							for _, htmlObject := range htmlObjects {
+								if htmlObject.Resource_type == armResourceType.Resource_type {
+									htmlCapture = htmlObject
+								}
+							}
+						} else {
+							htmlCapture = htmlObjectCaptureRootArmResources
+						}
+						compileObjectRootResources := CompileObject{
+							ResourceDefinitionName: "azurerm", //Must be changed from static the moment the decompiler supports more than just azurerm
+							ArmObject:              armBasicObject,
+							Variables:              nil,
+							BlockAttributes:        blockObjectsRootResources,
+							SeperatedResource:      false,
+							FilePath:               resourceFileName,
+							ResourceType:           strings.Replace(resourceFileName, ".tf", "", 1),
+							ResourceName:           masterKeyRoot,
+							IsRoot:                 true,
+							HtmlObject:             htmlCapture,
+							ProviderName:           strings.Replace(strings.Replace(strings.Replace(masterKeyRoot, `"`, "", -1), ".", "-", -1), " ", "", -1),
+						}
+						compiledObjects = append(compiledObjects, compileObjectRootResources)
+						blockObjectsRootResources = []BlockAttribute{}
 					}
-					compiledObjects = append(compiledObjects, compileObjectRootResources)
 
 				} else if !armResourceType.CanBeSeperated {
-					blockObjectsSeperatedResources = append(blockObjectsSeperatedResources, GetBlocksFromRootAttributes(rootAttributesFromSeperatedResources, htmlObjectCaptureSeperatedResource, false)...)
-					compileObjectSeperatedResources := CompileObject{
-						ResourceDefinitionName: "azurerm", //Must be changed from static the moment the decompiler supports more than just azurerm
-						ArmObject:              armBasicObject,
-						Variables:              nil,
-						BlockAttributes:        blockObjectsSeperatedResources,
-						SeperatedResource:      true,
-						FilePath:               resourceFileName,
-						ResourceType:           strings.Replace(resourceFileName, ".tf", "", 1),
-						ResourceName:           resourceName,
-						HtmlObject:             htmlObjectCaptureSeperatedResource,
+					for resourceName, rootAttributes := range mapOfRootAttributes {
+						blockObjectsSeperatedResources = []BlockAttribute{}
+						blockObjectsSeperatedResources = append(blockObjectsSeperatedResources, GetBlocksFromRootAttributes(rootAttributes, htmlObjectCaptureSeperatedResource, false)...)
+						if len(blockObjectsSeperatedResources) > 0 {
+							compileObjectSeperatedResources := CompileObject{
+								ResourceDefinitionName: "azurerm", //Must be changed from static the moment the decompiler supports more than just azurerm
+								ArmObject:              armBasicObject,
+								Variables:              nil,
+								BlockAttributes:        blockObjectsSeperatedResources,
+								SeperatedResource:      true,
+								FilePath:               resourceFileName,
+								ResourceType:           strings.Replace(resourceFileName, ".tf", "", 1),
+								ResourceName:           resourceName,
+								HtmlObject:             htmlObjectCaptureSeperatedResource,
+								ProviderName:           strings.Replace(strings.Replace(strings.Replace(resourceName, `"`, "", -1), ".", "-", -1), " ", "", -1),
+							}
+							compiledObjects = append(compiledObjects, compileObjectSeperatedResources)
+						}
 					}
-					compiledObjects = append(compiledObjects, compileObjectSeperatedResources)
 				}
 			}
 		}
 		/*
+			fmt.Println("\n---------------------RESOURCE NAME ----------------------------")
 			for _, compiledObject := range compiledObjects {
-				fmt.Println("\nCOMPILED OBJECT --------------", compiledObject.ResourceName)
-				for _, block := range compiledObject.BlockAttributes {
-					fmt.Println(fmt.Sprintf("\n-------------BLOCK----------------%s-%s", block.BlockName, block.Parent))
-					for index2, rootAttribute := range block.RootAttribute {
-						fmt.Println(index2, "NAME", rootAttribute.Name, "BLOCK", rootAttribute.BlockName, "IS", rootAttribute.IsBlock)
+				if compiledObject.ResourceName == "ruc-we-corenetwork-vnet01-to-ruc-we-ipaasintegrations-peer" {
+					fmt.Println("\nCOMPILED OBJECT --------------", compiledObject.ResourceName)
+					for _, block := range compiledObject.BlockAttributes {
+						fmt.Println(fmt.Sprintf("\n-------------BLOCK----------------%s-%s", block.BlockName, block.Parent))
+						for index2, rootAttribute := range block.RootAttribute {
+							fmt.Println(index2, "NAME", rootAttribute.Name, "BLOCK", rootAttribute.BlockName, "IS", rootAttribute.IsBlock, rootAttribute.Value)
+						}
 					}
+					break
 				}
 			}
 		*/
@@ -2141,17 +2483,7 @@ func CompileTerraformObjects(armBasicObjects []ArmObject, htmlObjects []HtmlObje
 		}
 		compiledObjects[index].BlockAttributes = blockAttributesNotEmpty
 	}
-	/*
-		for _, compiledObject := range compiledObjects {
-			fmt.Println("\nCOMPILED OBJECT --------------", compiledObject.ResourceName)
-			for _, block := range compiledObject.BlockAttributes {
-				fmt.Println(fmt.Sprintf("\n-------------BLOCK----------------%s-%s", block.BlockName, block.Parent))
-				for index2, rootAttribute := range block.RootAttribute {
-					fmt.Println(index2, "NAME", rootAttribute.Name, "BLOCK", rootAttribute.BlockName, "IS", rootAttribute.IsBlock)
-				}
-			}
-		}
-	*/
+
 	//fmt.Println("LEN OF COMPILED OBJECTS:", len(compiledObjects))
 
 	return compiledObjects
@@ -2204,9 +2536,7 @@ func GetInnerRootAttributes(armProperties interface{}, htmlObject HtmlObject, ma
 									}
 								}
 								if CheckForSliceWithMaps(minimumAttributeValue) {
-									for _, innerSlice := range minimumAttributeValue.([]interface{}) {
-										fmt.Println("NOW WE HERE_:", innerSlice)
-									}
+
 								} else if CheckForMap(minimumAttributeValue) {
 									for deepAttributeName, deepAttributeValue := range minimumAttributeValue.(map[string]interface{}) {
 										deepHtmlAttributeMatch := GetHtmlAttributeMatch(deepAttributeName, htmlObject.Attribute, deepAttributeValue, minimumAttributeName)
@@ -2432,6 +2762,7 @@ func GetBlocksFromRootAttributes(rootAttributes []RootAttribute, htmlObject Html
 			}
 		}
 	}
+
 	//Summarize root attributes whereever possible
 	for _, rootAttribute := range rootAttributes {
 		var fromSliceValues []string
@@ -2714,7 +3045,24 @@ func GetBlocksFromRootAttributes(rootAttributes []RootAttribute, htmlObject Html
 	}
 
 	blockRootAttributes = []RootAttribute{}
+	//rootName := ""
+	/*
+		for _, rootAttribute := range almostSummarizeRootAttributes {
+			if rootAttribute.Name == "name" && !rootAttribute.IsBlock && rootAttribute.BlockName == "root" {
+				if CheckForEmptyArmValue(rootAttribute.Value) {
+					rootName =
+				}
+				rootName = rootAttribute.Value.(string)
+			}
+		}
+	*/
+	/*
+		for index, rootAttribute := range almostSummarizeRootAttributes {
+			if !rootAttribute.IsBlock && rootAttribute.BlockName != "root" && rootAttribute.Name == "name" {
 
+			}
+		}
+	*/
 	for _, rootAttribute := range almostSummarizeRootAttributes {
 		if rootAttribute.IsBlock {
 			blockRootAttributes = append(blockRootAttributes, rootAttribute)
@@ -2786,27 +3134,6 @@ func GetBlocksFromRootAttributes(rootAttributes []RootAttribute, htmlObject Html
 
 		blocksForReturn[index].RootAttribute = rootAttributes
 	}
-	/*
-		mapOfBlockAttributes := make(map[string]bool)
-		summarizedBlocksForReturn := []BlockAttribute{}
-		for _, blockAttribute := range blocksForReturn {
-			if len(blockAttribute.RootAttribute) == 0 {
-				break
-			}
-			if blockAttribute.UniqueBlockName != "" {
-				if !mapOfBlockAttributes[fmt.Sprintf("%s,%s", blockAttribute.BlockName, blockAttribute.UniqueBlockName)] && blockAttribute.BlockName != "" {
-					summarizedBlocksForReturn = append(summarizedBlocksForReturn, blockAttribute)
-					mapOfBlockAttributes[fmt.Sprintf("%s,%s", blockAttribute.BlockName, blockAttribute.UniqueBlockName)] = true
-				}
-			} else {
-				if !mapOfBlockAttributes[fmt.Sprintf("%s,%s", blockAttribute.BlockName, blockAttribute.Parent)] && blockAttribute.BlockName != "" {
-					summarizedBlocksForReturn = append(summarizedBlocksForReturn, blockAttribute)
-					mapOfBlockAttributes[fmt.Sprintf("%s,%s", blockAttribute.BlockName, blockAttribute.UniqueBlockName)] = true
-				}
-			}
-			fmt.Println("BLOCK:", blockAttribute)
-		}
-	*/
 
 	for index, blockAttriubte := range blocksForReturn {
 		if blockAttriubte.BlockName == "identity" {
@@ -2947,15 +3274,81 @@ func GetBlocksFromRootAttributes(rootAttributes []RootAttribute, htmlObject Html
 		}
 	}
 	/*
+		mapOfRootBlockAttributes := make(map[string]bool)
+		nameOfRootBlocks := []string{}
+		for _, block := range blocksWithPoisonRemoved {
+			if block.BlockName == "root" && block.Parent == "root" {
+				for _, rootAttribute := range block.RootAttribute {
+					if rootAttribute.IsBlock {
+						nameOfRootBlocks = append(nameOfRootBlocks, rootAttribute.Name)
+					}
+				}
+			}
+		}
 
-		fmt.Println("\n\n\n\n------------------------OBJECT--------------------------")
-		for index, blockAttribute := range blocksWithPoisonRemoved {
-			fmt.Println(index, "----------------BLOfCK---------------", blockAttribute.BlockName, "PARENT", blockAttribute.Parent, blockAttribute.UniqueBlockName)
-			for index2, rootAttribute := range blockAttribute.RootAttribute {
-				fmt.Println(index2, "ROOT", rootAttribute.Name, rootAttribute.IsBlock, rootAttribute.UniqueBlockName, rootAttribute.Value)
+		for _, blockName := range nameOfRootBlocks {
+			for _, block := range blocksWithPoisonRemoved {
+				if blockName == block.BlockName {
+					mapOfRootBlockAttributes[block.BlockName] = true
+					break
+				}
+			}
+			if !mapOfRootBlockAttributes[blockName] {
+				mapOfRootBlockAttributes[blockName] = true
+				fmt.Println("WE ARE MISSING THE FOLLOING BLOCK:", blockName)
 			}
 		}
 	*/
+
+	for index, block := range blocksWithPoisonRemoved {
+		for index2, rootAttribute := range block.RootAttribute {
+			if CheckForEmptyArmValue(rootAttribute.Value) && !rootAttribute.IsBlock {
+				for _, attribute := range htmlObject.Attribute {
+					if rootAttribute.Name == attribute.Name {
+						blocksWithPoisonRemoved[index].RootAttribute[index2].Value = fmt.Sprintf("value from ARM NOT FOUND BUT REQUIRED, see link for help (TOP OF THE PAGE) => \\%s", attribute.TerraformURL)
+						break
+					}
+				}
+			}
+		}
+	}
+	for index, block := range blocksWithPoisonRemoved {
+		match := false
+		for index2, rootAttribute := range block.RootAttribute {
+			if CheckForString(rootAttribute.Value) {
+				//htmlAttribute := Attribute{}
+				for _, attribute := range htmlObject.Attribute {
+					if attribute.Type != "armObject" && attribute.Name != "name" && strings.Contains(strings.ToLower(attribute.Descriptor), "possible value") && attribute.Name == rootAttribute.Name {
+						patternPossibleValues := regexp.MustCompile(`<code>(.*?)</code>`)
+						allSlicePossibleValues := patternPossibleValues.FindAllStringSubmatch(attribute.Descriptor, -1)
+
+						allPossibleValues := []string{}
+						for _, sliceValue := range allSlicePossibleValues {
+							if len(sliceValue) > 1 {
+								allPossibleValues = append(allPossibleValues, sliceValue[1])
+							}
+						}
+
+						for _, value := range allPossibleValues {
+							if value == rootAttribute.Value {
+								match = true
+							}
+						}
+
+						if !match && len(allPossibleValues) > 0 {
+							match = false
+							if len(allPossibleValues) == 1 {
+								blocksWithPoisonRemoved[index].RootAttribute[index2].Value = allPossibleValues[0]
+							} else {
+								blocksWithPoisonRemoved[index].RootAttribute[index2].Value = fmt.Sprintf("value from ARM not valid `%s` insted replace with one of the following values: [`%s`]", rootAttribute.Value, strings.Join(allPossibleValues, "`,`"))
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return blocksWithPoisonRemoved
 }
 
@@ -3064,7 +3457,6 @@ func ConvertFlatValueToRootAttribute(armPropertyValue interface{}, attribute Att
 func GetHtmlAttributeMatch(armPropertyName string, htmlAttributes []Attribute, armPropertyValue interface{}, blockName string) []Attribute {
 	var htmlAttributeReturn []Attribute
 	armPropertyNameConvert := ConvertArmAttributeName(armPropertyName, "")
-	//fmt.Println("THIS IS THE ATTRIBUTE BEING MATCHED", "BEFORE:", armPropertyName, "AFTER:", armPropertyNameConvert)
 	for _, htmlAttribute := range htmlAttributes {
 		if strings.ToLower(armPropertyName) != "id" && strings.ToLower(htmlAttribute.Name) != "location" && strings.ToLower(htmlAttribute.Name) != "locations" && !(htmlAttribute.Name == "name" && htmlAttribute.Parent == "root") {
 			if htmlAttribute.Name == armPropertyNameConvert && strings.HasPrefix(htmlAttribute.Parent, blockName) {
@@ -3254,23 +3646,96 @@ func NewTerraformObject(terraformCompiledObjects []CompileObject, providerVersio
 
 	terraformObject := TerraformObject{
 		ProviderVersion: providerVersion,
-		ProviderName:    terraformCompiledObjects[0].ResourceDefinitionName,
 		CompileObjects:  terraformCompiledObjects,
+		ProviderName:    "azurerm",
 	}
 	return terraformObject
 }
 
 func WriteTerraformConfigToDisk(terraformConfig string, fileName string) {
 	file, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	// Check if the file is empty
+	stat, _ := file.Stat()
+
+	// Prepend newline if the file is not empty
+	if stat.Size() > 0 {
+		terraformConfig = "\n\n" + terraformConfig
+	}
+
 	if err != nil {
-		fmt.Println("the following error occured while trying to create file name:%s\n%s", fileName, err)
+		logWarning(fmt.Sprintf("the following error occured while trying to create file name:%s\n%s", fileName, err))
 	}
 	defer file.Close()
-	file.WriteString(fmt.Sprintf("%s\n", terraformConfig))
+	file.WriteString(terraformConfig)
+}
+
+func logFatal(message string) {
+	red := color.New(color.FgHiRed).SprintFunc()
+	log.Fatal(red(message + "\n"))
 }
 
 func logVerbose(message string) {
 	if verbose {
-		fmt.Printf(("VERBOSE: " + message + "\n"))
+		currentTime := timeFormat(time.Now())
+		fmt.Printf("VERBOSE: " + currentTime + " " + message + "\n")
 	}
+}
+
+func logOK(message string) {
+	green := color.New(color.FgHiGreen).SprintFunc()
+	fmt.Printf(green(message + "\n"))
+}
+
+func logWarning(message string) {
+	currentTime := timeFormat(time.Now())
+	yellow := color.New(color.FgHiYellow).SprintFunc()
+	fmt.Printf(yellow("WARNING: " + currentTime + " " + message + "\n"))
+}
+
+func timeFormat(time time.Time) string {
+	time.Format("2000-01-01 00:00:00")
+	return strings.Split(time.Local().String(), ".")[0]
+}
+
+func CheckChromeInstalled(customChromePath string) bool {
+	var chromePaths []string
+
+	switch runtime.GOOS {
+	case "windows":
+		// Common paths for Chrome on Windows
+		chromePaths = []string{
+			"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+			"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+		}
+	case "darwin":
+		// Common path for Chrome on macOS
+		chromePaths = []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		}
+	case "linux":
+		// Common paths for Chrome on Linux
+		chromePaths = []string{
+			"/usr/bin/google-chrome",
+			"/usr/local/bin/google-chrome",
+			"/snap/bin/chromium", // For Chromium as an alternative
+		}
+	default:
+		logFatal(fmt.Sprintf("Unsupported operating system %s", runtime.GOOS))
+		return false
+	}
+
+	// Check if any of the paths exist
+	for _, path := range chromePaths {
+		if customChromePath != "" {
+			if _, err := os.Stat(customChromePath); err == nil {
+				return true
+			}
+		}
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
