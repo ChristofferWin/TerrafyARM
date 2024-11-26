@@ -2,6 +2,8 @@
 The TerrafyARM mascot says HI and welcome to the worlds very first ARM to Terraform decompiler / compiler!
 ![TerrafyARM Logo](https://github.com/ChristofferWin/TerrafyARM/blob/main/docs/TerrafyARM%20mascot%20small.png "TerrafyARM - Decompiling ARM Templates")
 
+<a href="https://github.com/ChristofferWin/TerrafyARM/releases/tag/0.1.0-alpha">(Having issues with the different package managers so please install the binary directly for now)</a>
+
 
 ## Sections
 1. [Disclaimer](#disclaimer)
